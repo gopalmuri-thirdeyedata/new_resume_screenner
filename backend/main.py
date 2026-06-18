@@ -28,7 +28,20 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # Database Init
-models.Base.metadata.create_all(bind=database.engine)
+import time
+from sqlalchemy.exc import OperationalError
+
+max_retries = 10
+for i in range(max_retries):
+    try:
+        models.Base.metadata.create_all(bind=database.engine)
+        print("Database connected and tables initialized successfully.")
+        break
+    except OperationalError as e:
+        if i == max_retries - 1:
+            raise e
+        print(f"Database connection failed. Retrying in 2 seconds... ({i + 1}/{max_retries})")
+        time.sleep(2)
 
 # CORS
 app.add_middleware(

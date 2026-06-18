@@ -31,6 +31,28 @@ RECLAIM_INTERVAL = 30
 
 # ── Sync DB operations (run via asyncio.to_thread) ──────────────────────────
 
+class ScreeningValidationError(ValueError):
+    pass
+
+
+def is_dummy_contact(value: str) -> bool:
+    if not value:
+        return True
+    val_lower = value.lower().strip()
+    dummy_keywords = [
+        "xxx@gmail.com", "xxx@", "example.com", "placeholder", "dummy", "redacted",
+        "your.email", "yourname", "email.com", "email@address", "your.phone", 
+        "123-456-7890", "1234567890", "xxx-xxx-xxx"
+    ]
+    if any(k in val_lower for k in dummy_keywords):
+        return True
+    
+    clean_phone = re.sub(r'[\s\-\+\(\)]', '', val_lower)
+    if not clean_phone or all(c == 'x' for c in clean_phone) or all(c == '0' for c in clean_phone) or len(clean_phone) < 7:
+        return True
+    return False
+
+
 def _do_screening(job_id: int) -> dict:
     """
     Full synchronous screening pipeline for one ScreeningJob.
@@ -62,29 +84,104 @@ def _do_screening(job_id: int) -> dict:
 
         log(f"[Worker] Job {job_id} → extracted {len(full_text)} chars")
 
-        # 2. Keyword score (fast regex-based, no LLM)
-        keyword_score, matched_skills, missing_skills = get_keyword_score(full_text, job.jd_text)
-        log(f"[Worker] Job {job_id} → keyword score: {keyword_score} | matched: {matched_skills[:5]}")
+        is_image_pdf = False
+        images = []
+        if suffix == ".pdf" and len(full_text.strip()) < 100:
+            log(f"[Worker] Job {job_id} → low text count, trying image extraction")
+            images = RAGService.extract_images_from_pdf(file_path)
+            if not images:
+                raise ScreeningValidationError("Scanned PDF detected (less than 100 characters of text), but no images could be extracted.")
+            is_image_pdf = True
 
-        # 3. SINGLE Gemini call: extract contact info + deep screening in one prompt
-        log(f"[Worker] Job {job_id} → calling Gemini (single merged call)...")
+        has_custom_keywords = "required keywords:" in job.jd_text.lower()
         weights = RAGService._get_scoring_weights()
-        merged = RAGService.screen_and_extract(job.jd_text, full_text, weights)
 
-        # Split merged result into contact info and analysis
-        candidate_info = {
-            "name": merged.get("name") or "Unknown Candidate",
-            "email": merged.get("email"),
-            "phone": RAGService._clean_phone(merged.get("phone")),
-        }
-        analysis = {
-            "score":            merged.get("score", keyword_score),
-            "component_scores": merged.get("component_scores", {}),
-            "key_skills_match": merged.get("key_skills_match", []),
-            "missing_skills":   merged.get("missing_skills", []),
-            "reasoning":        merged.get("reasoning", ""),
-            "extracted_role":   merged.get("extracted_role", ""),
-        }
+        if is_image_pdf:
+            log(f"[Worker] Job {job_id} → calling Gemini Vision (multimodal)...")
+            merged = RAGService.screen_and_extract_from_images(job.jd_text, images, weights)
+            full_text = merged.get("full_text", "")
+            
+            # Post-vision keyword check (on extracted text)
+            if has_custom_keywords:
+                keyword_score, matched_skills, missing_skills = get_keyword_score(full_text, job.jd_text)
+                log(f"[Worker] Job {job_id} → post-vision keyword check: matched {len(matched_skills)} keywords.")
+                if len(matched_skills) == 0:
+                    raise ScreeningValidationError("Resume did not match any of the required keywords. (Matched: 0)")
+
+            # Split merged result into contact info and analysis
+            candidate_info = {
+                "name": merged.get("name") or "Unknown Candidate",
+                "email": merged.get("email"),
+                "phone": RAGService._clean_phone(merged.get("phone")),
+            }
+            email_dummy = is_dummy_contact(candidate_info["email"])
+            phone_dummy = is_dummy_contact(candidate_info["phone"])
+            if email_dummy and phone_dummy:
+                raise ScreeningValidationError("Could not extract contact information (neither email nor phone number found in scanned resume after vision analysis).")
+
+            analysis = {
+                "score":            merged.get("score") or 0.0,
+                "component_scores": merged.get("component_scores", {}),
+                "key_skills_match": merged.get("key_skills_match", []),
+                "missing_skills":   merged.get("missing_skills", []),
+                "reasoning":        merged.get("reasoning", ""),
+                "extracted_role":   merged.get("extracted_role", ""),
+            }
+        else:
+            # 2. Keyword score check first (fast regex-based, no LLM)
+            if has_custom_keywords:
+                keyword_score, matched_skills, missing_skills = get_keyword_score(full_text, job.jd_text)
+                log(f"[Worker] Job {job_id} → keyword check: matched {len(matched_skills)} required keywords.")
+                if len(matched_skills) == 0:
+                    raise ScreeningValidationError("Resume did not match any of the required keywords. (Matched: 0)")
+            else:
+                keyword_score = 0.0
+
+            # 3. Contact extraction gate (fast regex, no LLM)
+            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+            email_match = re.search(email_pattern, full_text)
+            
+            # Phone patterns
+            phone_patterns = [
+                r'(?:\+91[\s.-]?)?[6-9]\d{4}[\s.-]?\d{5}',           # +91 9876543210
+                r'(?:0|91)?[\s.-]?[6-9]\d{4}[\s.-]?\d{5}',           # 091 98765 43210
+                r'(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}', # US format fallback
+                r'(?:\+?\d[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)?\d{3}[\s.-]?\d{4,7}',  # General
+            ]
+            has_phone = False
+            for pattern in phone_patterns:
+                phone_matches = re.findall(pattern, full_text[:3000])
+                for pm in phone_matches:
+                    if not is_dummy_contact(pm):
+                        cleaned = RAGService._clean_phone(pm)
+                        if cleaned and not is_dummy_contact(cleaned):
+                            has_phone = True
+                            break
+                if has_phone:
+                    break
+            
+            has_email = email_match is not None and not is_dummy_contact(email_match.group(0))
+            if not has_email and not has_phone:
+                raise ScreeningValidationError("Could not extract contact information (neither email nor phone number found in resume).")
+
+            # 4. SINGLE Gemini call: extract contact info + deep screening in one prompt
+            log(f"[Worker] Job {job_id} → calling Gemini (single merged call)...")
+            merged = RAGService.screen_and_extract(job.jd_text, full_text, weights)
+
+            # Split merged result into contact info and analysis
+            candidate_info = {
+                "name": merged.get("name") or "Unknown Candidate",
+                "email": merged.get("email"),
+                "phone": RAGService._clean_phone(merged.get("phone")),
+            }
+            analysis = {
+                "score":            merged.get("score", keyword_score),
+                "component_scores": merged.get("component_scores", {}),
+                "key_skills_match": merged.get("key_skills_match", []),
+                "missing_skills":   merged.get("missing_skills", []),
+                "reasoning":        merged.get("reasoning", ""),
+                "extracted_role":   merged.get("extracted_role", ""),
+            }
 
         # Filename fallback for name
         if candidate_info["name"] in ("Unknown Candidate", "Unknown", None, "Null"):
@@ -96,8 +193,8 @@ def _do_screening(job_id: int) -> dict:
                 candidate_info["name"] = clean_name
 
         email = candidate_info.get("email")
-        if not email:
-            raise ValueError(f"Could not extract email from {filename}")
+        if not email or is_dummy_contact(email):
+            raise ScreeningValidationError(f"Could not extract a valid email from {filename} (email is required for candidate record).")
         log(f"[Worker] Job {job_id} → email: {email} | LLM score: {analysis['score']}")
 
         # 4. Normalize role from first line of JD
@@ -202,9 +299,16 @@ async def process_one(
             result = await asyncio.to_thread(_do_screening, job_id)
             await redis_queue.ack_job(client, msg_id)
             # Fire-and-forget RAG indexing (non-blocking)
-            asyncio.create_task(
-                _index_for_rag(result["candidate_id"], result["user_id"], result["full_text"])
-            )
+            if result and result.get("candidate_id"):
+                asyncio.create_task(
+                    _index_for_rag(result["candidate_id"], result["user_id"], result["full_text"])
+                )
+        except ScreeningValidationError as e:
+            err_msg = str(e)
+            log(f"[Worker] ✗ Job {job_id} failed validation: {err_msg}")
+            # Mark dead immediately, no retries
+            await asyncio.to_thread(_mark_failed, job_id, err_msg, True)
+            await redis_queue.ack_job(client, msg_id)
         except Exception:
             err = traceback.format_exc()
             log(f"[Worker] ✗ Job {job_id} failed:\n{err}")

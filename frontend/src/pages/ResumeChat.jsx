@@ -45,9 +45,19 @@ const SUGGESTIONS = [
 ];
 
 // ─── Markdown Renderer ───────────────────────────────────────────────────────
+function formatMarkdownText(text) {
+    if (!text) return '';
+    let formatted = text;
+    // Replace " 1. " or ". 1. " with "\n\n1. " for inline numbered lists
+    formatted = formatted.replace(/(?:^|\b|\.|\s)([1-9]\.)\s+\*\*/g, "\n\n$1 **");
+    formatted = formatted.replace(/(?:^|\b|\.|\s)([1-9]\.)\s+([A-Z])/g, "\n\n$1 $2");
+    return formatted.trim();
+}
+
 function renderMarkdown(text) {
     if (!text) return '';
-    const lines = text.split('\n');
+    const cleanText = formatMarkdownText(text);
+    const lines = cleanText.split('\n');
     const result = [];
     let inList = false;
     let listItems = [];
@@ -59,7 +69,7 @@ function renderMarkdown(text) {
                     {listItems.map((item, i) => (
                         <li key={i} className="flex items-start gap-2">
                             <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#5d8c2c] flex-shrink-0" />
-                            <span>{parseInline(item)}</span>
+                            <span className="text-sm text-gray-700 leading-relaxed">{parseInline(item)}</span>
                         </li>
                     ))}
                 </ul>
@@ -72,13 +82,17 @@ function renderMarkdown(text) {
     lines.forEach((line, idx) => {
         const trimmed = line.trim();
 
-        // Heading ##
-        if (trimmed.startsWith('## ')) {
+        // Heading: #, ##, ###, ####
+        const headingMatch = trimmed.match(/^(#{1,4})\s+(.*)$/);
+        if (headingMatch) {
             flushList();
+            const level = headingMatch[1].length;
+            const content = headingMatch[2];
+            const sizeClass = level === 1 ? "text-lg font-extrabold" : level === 2 ? "text-base font-bold" : "text-sm font-semibold";
             result.push(
-                <h3 key={idx} className="font-bold text-sm text-gray-900 mt-3 mb-1 border-b border-gray-100 pb-1">
-                    {trimmed.slice(3)}
-                </h3>
+                <h4 key={idx} className={`${sizeClass} text-gray-900 mt-4 mb-2 pb-1 border-b border-gray-100`}>
+                    {parseInline(content)}
+                </h4>
             );
             return;
         }
@@ -103,7 +117,7 @@ function renderMarkdown(text) {
             result.push(<div key={idx} className="h-2" />);
         } else {
             result.push(
-                <p key={idx} className="leading-relaxed">
+                <p key={idx} className="leading-relaxed text-sm text-gray-700 mb-2">
                     {parseInline(trimmed)}
                 </p>
             );
@@ -115,11 +129,12 @@ function renderMarkdown(text) {
 }
 
 function parseInline(text) {
+    if (!text) return '';
     // **bold** parsing
     const parts = text.split(/\*\*(.*?)\*\*/g);
     return parts.map((part, i) =>
         i % 2 === 1
-            ? <strong key={i} className="font-semibold text-gray-900">{part}</strong>
+            ? <strong key={i} className="font-bold text-gray-900">{part}</strong>
             : part
     );
 }

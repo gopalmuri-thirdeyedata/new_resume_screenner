@@ -1,44 +1,70 @@
 import React, { useState, useEffect } from 'react';
 import {
-    Save, Building2, Shield, Bell, Mail, Settings, CheckCircle
+    Save, CheckCircle, AlertTriangle, X,
+    Zap, Briefcase, FolderGit2, GraduationCap, Star
 } from 'lucide-react';
 import API_URL from '../apiConfig';
 
-const GlobalSettings = () => {
-    const [activeTab, setActiveTab] = useState('scoring');
-    const [saving, setSaving] = useState(false);
-    const [showSuccess, setShowSuccess] = useState(false);
-    const [hasChanges, setHasChanges] = useState(false);
+const WEIGHTS = [
+    {
+        key: 'skills',
+        label: 'Skills Matching',
+        description: 'Semantic and keyword alignment between resume technical profiles and Job Description demands.',
+        icon: Zap,
+        color: '#5d8c2c',
+        light: '#f0f7e6',
+        border: '#c6e2a0',
+    },
+    {
+        key: 'experience',
+        label: 'Experience Relevance',
+        description: 'Years of experience match, seniority level comparison, and background progression checks.',
+        icon: Briefcase,
+        color: '#3b82f6',
+        light: '#eff6ff',
+        border: '#bfdbfe',
+    },
+    {
+        key: 'projects',
+        label: 'Project & Role Alignment',
+        description: 'Technical complexity, scope of contributions, and product alignment detailed in projects.',
+        icon: FolderGit2,
+        color: '#8b5cf6',
+        light: '#f5f3ff',
+        border: '#ddd6fe',
+    },
+    {
+        key: 'education',
+        label: 'Education Match',
+        description: 'Degrees, certifications, specializations, and institutional background verification.',
+        icon: GraduationCap,
+        color: '#f59e0b',
+        light: '#fffbeb',
+        border: '#fde68a',
+    },
+    {
+        key: 'bonus',
+        label: 'Preferred & Bonus Skills',
+        description: 'Nice-to-have parameters, extra certificates, or extracurricular matches from the JD.',
+        icon: Star,
+        color: '#ec4899',
+        light: '#fdf2f8',
+        border: '#fbcfe8',
+    },
+];
 
-    // Initial state with scoring and pipeline defaults
-    const [formData, setFormData] = useState({
-        orgName: 'Acme Corp',
-        timezone: 'UTC-5 (EST)',
-        scoring: {
-            skills: 40,
-            experience: 25,
-            projects: 20,
-            education: 10,
-            bonus: 5
-        },
-        emails: {
-            invitationSubject: 'Invitation to Assessment Round - HiringAI',
-            invitationBody: 'Dear Candidate,\n\nYou have been promoted to the next stage of our recruitment process. Please log in to the portal to take your assessment.',
-            reminderSubject: 'Reminder: Pending Assessment - HiringAI',
-            reminderBody: 'Dear Candidate,\n\nThis is a friendly reminder to complete your pending assessment as soon as possible.'
-        },
-        security: {
-            faceProctoring: true,
-            fullscreenProctoring: true,
-            autoFlagSuspicious: true
-        },
-        notifications: {
-            emailAlerts: true,
-            slackIntegration: false,
-            weeklyDigest: true,
-            recipientEmail: 'gopalmuri1919@gmail.com'
-        }
-    });
+const DEFAULT_SCORING = { skills: 40, experience: 25, projects: 20, education: 10, bonus: 5 };
+
+const GlobalSettings = () => {
+    const [scoring, setScoring] = useState(DEFAULT_SCORING);
+    const [saveState, setSaveState] = useState('idle'); // idle | saving | success
+    const [hasChanges, setHasChanges] = useState(false);
+    const [toast, setToast] = useState(null);
+
+    const showToast = (message, type = 'success') => {
+        setToast({ message, type });
+        setTimeout(() => setToast(null), 4000);
+    };
 
     useEffect(() => {
         const token = localStorage.getItem('token');
@@ -47,39 +73,29 @@ const GlobalSettings = () => {
         })
             .then(res => res.json())
             .then(data => {
-                if (data) {
-                    setFormData(prev => ({
-                        ...prev,
-                        ...data,
-                        scoring: { ...prev.scoring, ...(data.scoring || {}) },
-                        emails: { ...prev.emails, ...(data.emails || {}) },
-                        security: { ...prev.security, ...(data.security || {}) },
-                        notifications: { ...prev.notifications, ...(data.notifications || {}) }
-                    }));
-                    setHasChanges(false);
+                if (data?.scoring) {
+                    setScoring({ ...DEFAULT_SCORING, ...data.scoring });
                 }
             })
-            .catch(err => console.error("Failed to load settings", err));
+            .catch(() => {});
     }, []);
 
-    // Calculate dynamic weights sum
-    const currentScoring = formData.scoring || { skills: 40, experience: 25, projects: 20, education: 10, bonus: 5 };
-    const scoringSum = 
-        (currentScoring.skills || 0) + 
-        (currentScoring.experience || 0) + 
-        (currentScoring.projects || 0) + 
-        (currentScoring.education || 0) + 
-        (currentScoring.bonus || 0);
-
+    const scoringSum = WEIGHTS.reduce((s, w) => s + (scoring[w.key] || 0), 0);
     const isScoringValid = scoringSum === 100;
+    const diff = 100 - scoringSum;
+
+    const updateWeight = (key, rawVal) => {
+        const num = Math.max(0, Math.min(100, parseInt(rawVal) || 0));
+        const othersSum = WEIGHTS.filter(w => w.key !== key)
+            .reduce((s, w) => s + (scoring[w.key] || 0), 0);
+        const clamped = Math.min(num, 100 - othersSum);
+        setScoring(prev => ({ ...prev, [key]: clamped }));
+        setHasChanges(true);
+    };
 
     const handleSave = async () => {
-        if (!isScoringValid) {
-            alert(`Total scoring weight must equal exactly 100%. Currently it is ${scoringSum}%. Please adjust the sliders before saving.`);
-            return;
-        }
-
-        setSaving(true);
+        if (!isScoringValid || !hasChanges) return;
+        setSaveState('saving');
         try {
             const res = await fetch(`${API_URL}/api/settings/`, {
                 method: 'PUT',
@@ -87,315 +103,228 @@ const GlobalSettings = () => {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${localStorage.getItem('token')}`
                 },
-                body: JSON.stringify({ config: formData })
+                body: JSON.stringify({ config: { scoring } })
             });
-
             if (res.ok) {
-                setShowSuccess(true);
                 setHasChanges(false);
-                setTimeout(() => setShowSuccess(false), 3000);
+                setSaveState('success');
+                showToast('Scoring weights saved successfully.');
+                setTimeout(() => setSaveState('idle'), 3000);
             } else {
-                throw new Error("Failed to save");
+                throw new Error();
             }
-        } catch (error) {
-            console.error("Save failed", error);
-            alert("Failed to save settings. Please try again.");
-        } finally {
-            setSaving(false);
+        } catch {
+            setSaveState('idle');
+            showToast('Failed to save settings. Please try again.', 'error');
         }
     };
 
-    const updateScoringField = (field, val) => {
-        setFormData(prev => ({
-            ...prev,
-            scoring: {
-                ...prev.scoring,
-                [field]: val
-            }
-        }));
-        setHasChanges(true);
-    };
-
-    const updateEmailField = (field, val) => {
-        setFormData(prev => ({
-            ...prev,
-            emails: {
-                ...prev.emails,
-                [field]: val
-            }
-        }));
-        setHasChanges(true);
-    };
-
-    const updateSecurityField = (field, val) => {
-        setFormData(prev => ({
-            ...prev,
-            security: {
-                ...prev.security,
-                [field]: val
-            }
-        }));
-        setHasChanges(true);
-    };
-
-    const updateNotificationField = (field, val) => {
-        setFormData(prev => ({
-            ...prev,
-            notifications: {
-                ...prev.notifications,
-                [field]: val
-            }
-        }));
-        setHasChanges(true);
-    };
-
-    const tabs = [
-        { id: 'scoring', label: 'AI Scoring Weights', icon: BrainCircuitIcon },
-        // COMMENTED OUT: { id: 'notifications', label: 'Notifications', icon: Bell },
-        // COMMENTED OUT: { id: 'email', label: 'Email Templates', icon: Mail },
-        // COMMENTED OUT: { id: 'security', label: 'Security & Proctoring', icon: Shield }
-    ];
-
     return (
-        <div className="max-w-[1200px] mx-auto pb-20">
-            {/* Header */}
-            <div className="flex justify-between items-start mb-8">
+        <div className="max-w-5xl mx-auto pb-16 px-1">
+
+            {/* ── Page Header ── */}
+            <div className="flex items-start justify-between mb-8 gap-4 flex-wrap">
                 <div>
-                    <h1 className="text-3xl font-extrabold text-gray-900 flex items-center gap-3">
-                        <Settings className="text-gray-600" /> Global Settings
-                    </h1>
-                    <p className="text-gray-500 mt-2">Manage your hiring pipeline, email templates, and AI configurations centrally.</p>
+                    <h1 className="text-3xl font-semibold text-[#5d8c2c] tracking-tight">AI Scoring Weights</h1>
+                    <p className="text-gray-500 text-sm mt-1.5 font-medium max-w-lg">
+                        Configure how the Groq AI engine weights each evaluation dimension when scoring resumes against a job description.
+                    </p>
                 </div>
                 <button
                     onClick={handleSave}
-                    disabled={saving || !isScoringValid || !hasChanges}
-                    className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 shadow-lg ${
-                        (saving || !isScoringValid || !hasChanges) 
-                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-none' 
-                            : 'bg-green-600 hover:bg-green-700 text-white shadow-green-100'
+                    disabled={saveState === 'saving' || !isScoringValid || !hasChanges}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all shrink-0 ${
+                        saveState === 'saving' || !isScoringValid || !hasChanges
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'bg-[#5d8c2c] text-white hover:bg-[#4a7023] shadow-md hover:shadow-lg hover:-translate-y-0.5'
                     }`}
                 >
-                    {saving ? (
-                        <>Saving...</>
-                    ) : showSuccess ? (
-                        <><CheckCircle size={20} /> Saved!</>
-                    ) : (
-                        <><Save size={20} /> Save Changes</>
+                    {saveState === 'saving' && (
+                        <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
                     )}
+                    {saveState === 'success' && <CheckCircle size={16} />}
+                    {saveState === 'idle' && <Save size={16} />}
+                    {saveState === 'saving' ? 'Saving…' : saveState === 'success' ? 'Saved!' : 'Save Changes'}
                 </button>
             </div>
 
-            <div className="flex flex-col lg:flex-row gap-8">
-                {/* Sidebar Navigation */}
-                <div className="w-full lg:w-64 flex-shrink-0">
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden sticky top-24">
-                        <div className="p-4 bg-gray-50 border-b border-gray-100 font-bold text-gray-500 text-xs uppercase tracking-wider">
-                            Configuration
-                        </div>
-                        <nav className="flex flex-col p-2 space-y-1">
-                            {tabs.map(tab => {
-                                const Icon = tab.icon;
-                                const isActive = activeTab === tab.id;
-                                return (
-                                    <button
-                                        key={tab.id}
-                                        onClick={() => setActiveTab(tab.id)}
-                                        className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors w-full text-left
-                                            ${isActive
-                                                ? 'bg-green-50 text-green-700'
-                                                : 'text-gray-600 hover:bg-gray-50'
-                                            }`}
-                                    >
-                                        <Icon size={18} />
-                                        {tab.label}
-                                    </button>
-                                );
-                            })}
-                        </nav>
+            {/* ── Distribution Overview ── */}
+            <div className="bg-white border border-gray-200 rounded-2xl p-6 mb-6 shadow-sm">
+                <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+                    <div>
+                        <p className="text-sm font-bold text-gray-800">Weight Distribution</p>
+                        <p className="text-xs text-gray-400 mt-0.5">All five weights must sum to exactly 100%</p>
                     </div>
+                    <span className={`text-sm font-bold px-3 py-1.5 rounded-full border ${
+                        isScoringValid
+                            ? 'bg-green-50 text-[#5d8c2c] border-green-200'
+                            : diff > 0
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-red-50 text-red-600 border-red-200'
+                    }`}>
+                        {scoringSum} / 100%
+                    </span>
                 </div>
 
-                {/* Main Content Area */}
-                <div className="flex-1 space-y-6">
-                    {/* AI SCORING WEIGHTS */}
-                    {activeTab === 'scoring' && (
-                        <Section title="AI Resume Evaluation Weights" description="Configure the scoring formula used by the Groq AI engine during screening.">
-                            <div className="space-y-6">
-                                {/* Total Sum Progress Indicator */}
-                                <div className={`p-4 rounded-xl border flex items-center gap-3 transition-colors ${
-                                    isScoringValid 
-                                        ? 'bg-green-50 border-green-200 text-green-800' 
-                                        : 'bg-amber-50 border-amber-200 text-amber-800'
-                                }}`}>
-                                    {isScoringValid ? <CheckCircle className="text-green-600 shrink-0" size={20} /> : <AlertTriangle className="text-amber-600 shrink-0" size={20} />}
-                                    <div className="flex-1">
-                                        <p className="font-bold text-sm">
-                                            Total Target Weight: <span className="underline">{scoringSum}%</span> / 100%
+                {/* Stacked fill bar */}
+                <div className="h-5 rounded-full overflow-hidden bg-gray-100 flex gap-px">
+                    {WEIGHTS.map(w => {
+                        const pct = scoring[w.key] || 0;
+                        if (pct === 0) return null;
+                        return (
+                            <div
+                                key={w.key}
+                                className="h-full transition-all duration-300 ease-out first:rounded-l-full last:rounded-r-full"
+                                style={{ width: `${pct}%`, backgroundColor: w.color }}
+                                title={`${w.label}: ${pct}%`}
+                            />
+                        );
+                    })}
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap gap-x-5 gap-y-2 mt-4">
+                    {WEIGHTS.map(w => (
+                        <div key={w.key} className="flex items-center gap-1.5">
+                            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: w.color }} />
+                            <span className="text-xs text-gray-500 font-medium">{w.label}</span>
+                            <span className="text-xs font-bold" style={{ color: w.color }}>{scoring[w.key] || 0}%</span>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Validation notice */}
+                {!isScoringValid && (
+                    <div className={`mt-5 flex items-center gap-2.5 text-sm font-medium px-4 py-3 rounded-xl border ${
+                        diff > 0
+                            ? 'bg-amber-50 border-amber-200 text-amber-700'
+                            : 'bg-red-50 border-red-200 text-red-600'
+                    }`}>
+                        <AlertTriangle size={15} className="shrink-0" />
+                        {diff > 0
+                            ? `${diff}% unallocated — increase any weight below to reach 100%.`
+                            : `${Math.abs(diff)}% over the limit — reduce a weight to reach exactly 100%.`}
+                    </div>
+                )}
+                {isScoringValid && hasChanges && (
+                    <div className="mt-5 flex items-center gap-2.5 text-sm font-medium px-4 py-3 rounded-xl border bg-green-50 border-green-200 text-[#5d8c2c]">
+                        <CheckCircle size={15} className="shrink-0" />
+                        Formula is balanced. Click Save Changes to apply.
+                    </div>
+                )}
+            </div>
+
+            {/* ── Weight Cards ── */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {WEIGHTS.map((w, idx) => {
+                    const Icon = w.icon;
+                    const value = scoring[w.key] || 0;
+                    const othersSum = WEIGHTS.filter(x => x.key !== w.key)
+                        .reduce((s, x) => s + (scoring[x.key] || 0), 0);
+                    const maxAllowed = 100 - othersSum;
+
+                    return (
+                        <div
+                            key={w.key}
+                            className="bg-white rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow"
+                            style={{ border: `1px solid ${w.border}` }}
+                        >
+                            {/* Card header */}
+                            <div className="flex items-start justify-between mb-3 gap-3">
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <div
+                                        className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                                        style={{ backgroundColor: w.light }}
+                                    >
+                                        <Icon size={18} style={{ color: w.color }} />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                                            Weight {idx + 1}
                                         </p>
-                                        <p className="text-xs mt-0.5 opacity-90">
-                                            {isScoringValid 
-                                                ? 'Scoring formula is balanced and valid. Changes can be saved.' 
-                                                : `Formula must sum up to exactly 100% to save. Please adjust parameters by ${100 - scoringSum}%`}
-                                        </p>
+                                        <h3 className="text-sm font-bold text-gray-800 leading-tight truncate">
+                                            {w.label}
+                                        </h3>
                                     </div>
                                 </div>
-
-                                <div className="space-y-5">
-                                    <Range 
-                                        label="1. Skills Matching" 
-                                        value={currentScoring.skills} 
-                                        onChange={(val) => updateScoringField('skills', val)} 
-                                        description="Semantic and keyword alignment between resume technical profiles and Job Description demands."
-                                    />
-                                    <Range 
-                                        label="2. Experience Relevance" 
-                                        value={currentScoring.experience} 
-                                        onChange={(val) => updateScoringField('experience', val)} 
-                                        description="Years of experience match, seniority level comparison, and background progression checks."
-                                    />
-                                    <Range 
-                                        label="3. Project & Role Alignment" 
-                                        value={currentScoring.projects} 
-                                        onChange={(val) => updateScoringField('projects', val)} 
-                                        description="Level of technical complexity, scope of contributions, and product alignment detailed in projects."
-                                    />
-                                    <Range 
-                                        label="4. Education Match" 
-                                        value={currentScoring.education} 
-                                        onChange={(val) => updateScoringField('education', val)} 
-                                        description="Verification of degrees, certifications, specializations, and institutional background matches."
-                                    />
-                                    <Range 
-                                        label="5. Preferred & Bonus Skills" 
-                                        value={currentScoring.bonus} 
-                                        onChange={(val) => updateScoringField('bonus', val)} 
-                                        description="Additional nice-to-have parameters, certificates, or extracurricular matches specified in JD."
-                                    />
+                                {/* Large percentage display */}
+                                <div className="flex flex-col items-end shrink-0">
+                                    <span
+                                        className="text-4xl font-black leading-none tabular-nums"
+                                        style={{ color: w.color }}
+                                    >
+                                        {value}
+                                    </span>
+                                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                                        percent
+                                    </span>
                                 </div>
                             </div>
-                        </Section>
-                    )}
 
-                    {/* COMMENTED OUT: NOTIFICATIONS SETTINGS
-                    {activeTab === 'notifications' && (
-                        <Section title="Notification Preferences" description="Configure when and how you want to be notified.">
-                            ... (preserved, re-enable by removing these comment tags)
-                        </Section>
-                    )} */}
+                            <p className="text-[11px] text-gray-500 leading-relaxed mb-4">
+                                {w.description}
+                            </p>
 
-                    {/* COMMENTED OUT: EMAIL TEMPLATES
-                    {activeTab === 'email' && (
-                        <Section title="Assessment Email Templates" description="...">
-                            ... (preserved, re-enable by removing these comment tags)
-                        </Section>
-                    )} */}
+                            {/* Slider with colored fill track */}
+                            <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                value={value}
+                                onChange={(e) => updateWeight(w.key, e.target.value)}
+                                className="w-full h-2 rounded-full appearance-none cursor-pointer mb-3"
+                                style={{
+                                    accentColor: w.color,
+                                    background: `linear-gradient(to right, ${w.color} ${value}%, #e5e7eb ${value}%)`,
+                                }}
+                            />
 
-                    {/* COMMENTED OUT: SECURITY & PROCTORING
-                    {activeTab === 'security' && (
-                        <Section title="Integrity & Proctoring Controls" description="...">
-                            ... (preserved, re-enable by removing these comment tags)
-                        </Section>
-                    )} */}
-                </div>
+                            {/* Footer: number input + max info */}
+                            <div className="flex items-center justify-between">
+                                <span className="text-[10px] text-gray-400 font-medium">0%</span>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max={maxAllowed}
+                                        value={value}
+                                        onChange={(e) => updateWeight(w.key, e.target.value)}
+                                        className="w-14 text-center text-sm font-bold border border-gray-200 rounded-lg py-1 focus:outline-none focus:ring-2 focus:border-transparent"
+                                        style={{ color: w.color, '--tw-ring-color': `${w.color}33` }}
+                                    />
+                                    <span className="text-[10px] text-gray-400 font-medium whitespace-nowrap">
+                                        max {maxAllowed}%
+                                    </span>
+                                </div>
+                                <span className="text-[10px] text-gray-400 font-medium">100%</span>
+                            </div>
+                        </div>
+                    );
+                })}
             </div>
+
+            {/* ── Toast ── */}
+            {toast && (
+                <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold animate-in fade-in slide-in-from-bottom-2 duration-200 ${
+                    toast.type === 'success'
+                        ? 'bg-green-50 border-green-200 text-[#5d8c2c]'
+                        : 'bg-red-50 border-red-200 text-red-700'
+                }`}>
+                    {toast.type === 'success'
+                        ? <CheckCircle size={16} className="shrink-0" />
+                        : <AlertTriangle size={16} className="shrink-0" />
+                    }
+                    {toast.message}
+                    <button
+                        onClick={() => setToast(null)}
+                        className="ml-1 opacity-50 hover:opacity-100 transition-opacity"
+                    >
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
         </div>
     );
 };
-
-// --- Reusable Components ---
-
-const Section = ({ title, description, children }) => (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="p-6 border-b border-gray-100">
-            <h3 className="text-lg font-bold text-gray-900">{title}</h3>
-            <p className="text-sm text-gray-500 mt-1">{description}</p>
-        </div>
-        <div className="p-6">
-            {children}
-        </div>
-    </div>
-);
-
-const Input = ({ label, value, disabled, suffix, onChange }) => (
-    <div className="space-y-1.5 w-full">
-        <label className="block text-sm font-semibold text-gray-700">{label}</label>
-        <div className="relative">
-            <input
-                type="text"
-                value={value}
-                disabled={disabled}
-                onChange={(e) => onChange && onChange(e.target.value)}
-                className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-950 font-medium focus:ring-2 focus:ring-green-500 outline-none disabled:text-gray-500"
-            />
-            {suffix && (
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-medium">
-                    {suffix}
-                </span>
-            )}
-        </div>
-    </div>
-);
-
-const Select = ({ label, options, value, onChange }) => (
-    <div className="space-y-1.5 w-full">
-        <label className="block text-sm font-semibold text-gray-700">{label}</label>
-        <select 
-            value={value} 
-            onChange={(e) => onChange && onChange(e.target.value)}
-            className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-950 font-bold focus:ring-2 focus:ring-green-500 outline-none cursor-pointer"
-        >
-            {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-        </select>
-    </div>
-);
-
-const Toggle = ({ label, description, checked, onChange }) => (
-    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
-        <div className="pr-4">
-            <h4 className="font-bold text-gray-900 text-sm">{label}</h4>
-            <p className="text-xs text-gray-500 mt-0.5 font-medium leading-relaxed">{description}</p>
-        </div>
-        <label className="relative inline-flex items-center cursor-pointer shrink-0">
-            <input 
-                type="checkbox" 
-                checked={checked} 
-                onChange={(e) => onChange && onChange(e.target.checked)} 
-                className="sr-only peer" 
-            />
-            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-green-100 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
-        </label>
-    </div>
-);
-
-const Range = ({ label, value, onChange, description, max = 100 }) => (
-    <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl space-y-2 w-full">
-        <div className="flex justify-between items-start gap-4">
-            <div>
-                <label className="font-bold text-gray-800 text-sm">{label}</label>
-                <p className="text-[11px] text-gray-500 font-medium mt-0.5 leading-relaxed">{description}</p>
-            </div>
-            <span className="font-extrabold text-green-700 bg-green-50 border border-green-200 px-3 py-1 rounded-lg text-sm shrink-0 min-w-[55px] text-center">
-                {value}{max === 100 ? '%' : 'm'}
-            </span>
-        </div>
-        <input 
-            type="range" 
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-green-600 hover:accent-green-700 transition-colors" 
-            value={value || 0} 
-            onChange={(e) => onChange(parseInt(e.target.value) || 0)}
-            min="0"
-            max={max}
-        />
-    </div>
-);
-
-const AlertTriangle = ({ size, className }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
-);
-
-// Icon for AI Brain
-const BrainCircuitIcon = ({ size, className }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" /><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" /><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" /><path d="M17.599 6.5a3 3 0 0 0 .399-1.375" /><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" /><path d="M3.477 10.896a4 4 0 0 1 .585-.396" /><path d="M19.938 10.5a4 4 0 0 1 .585.396" /><path d="M6 18a4 4 0 0 1-1.97-3.284" /><path d="M17.97 14.716A4 4 0 0 1 18 18" /></svg>
-);
 
 export default GlobalSettings;

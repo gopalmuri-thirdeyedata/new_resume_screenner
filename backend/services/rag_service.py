@@ -204,46 +204,55 @@ OUTPUT JSON ONLY:
         """
         sw = weights
         prompt = f"""
-You are a Senior Technical Recruiter AI. Given the JOB DESCRIPTION and CANDIDATE RESUME below, do TWO things in a single response:
+### System Instructions:
+You are an advanced Automated Applicant Tracking System (ATS) and Senior Technical Recruiter. Perform candidate evaluation and data extraction based on the JOB DESCRIPTION and the CANDIDATE RESUME text.
 
-1. EXTRACT the candidate's contact details.
-2. EVALUATE the candidate against the JD using the scoring rubric.
-
-JOB DESCRIPTION:
+### Inputs:
+#### Job Description:
 {jd_text}
 
-CANDIDATE RESUME:
+#### Candidate Resume:
 {full_text[:25000]}
 
-SCORING RUBRIC (Total 100 points):
-- Skills Matching ({sw.get('skills', 40)} pts): matched / total required skills × {sw.get('skills', 40)}
-- Experience Relevance ({sw.get('experience', 25)} pts): years + role relevance
-- Project / Role Alignment ({sw.get('projects', 20)} pts): complexity and impact
-- Education Match ({sw.get('education', 10)} pts): degree relevance
-- Preferred / Bonus Skills ({sw.get('bonus', 5)} pts): nice-to-have skills
+### Tasks:
+1. **Contact Information Extraction**: Extract the candidate's full name, email address, and phone number.
+   *CRITICAL CONTACT VALIDATION*: Do NOT extract placeholder, dummy, or redacted contact details (e.g. 'xxx@gmail.com', 'XXX-XXX-XXX', '123-456-7890', 'yourname@example.com', etc.). If the resume lacks actual valid contact details, you MUST return null for that field. Do not hallucinate or assume values.
+2. **Role Normalization**: Identify the candidate's primary job title or role from their recent experience.
+3. **Scoring & Evaluation**: Score the candidate's resume strictly against the criteria in the job description using the following weight weights:
+   - **Skills Matching** (Max: {sw.get('skills', 40)} pts): Evaluate core required technologies/methodologies. Match rate determines the score.
+   - **Experience Relevance** (Max: {sw.get('experience', 25)} pts): Assess length of relevant experience, seniority, and matching duties.
+   - **Project / Role Alignment** (Max: {sw.get('projects', 20)} pts): Evaluate technical complexity, achievements, scale, and impact in previous roles/projects.
+   - **Education Match** (Max: {sw.get('education', 10)} pts): Grade degree levels, fields of study, or relevant industry certifications.
+   - **Preferred / Bonus Skills** (Max: {sw.get('bonus', 5)} pts): Look for preferred qualifications or secondary requirements.
+   
+   *ETHICAL SCORING RULES & DEDUCTIONS*:
+   - Critically check for the presence of actual contact details. If a contact detail (like a phone number or email) is completely missing or contains only dummy/placeholder values, apply an incompleteness deduction of **10%** from the overall score to penalize unprofessional resume readiness.
+   - Base the component scores strictly and objectively on the candidate's skills relative to the Job Description and the required keywords (if specified in the JD under 'Required Keywords:'). If the candidate lacks essential required skills or experience, grade them rigorously and lower the scores accordingly.
+   - *Total Score constraint: The sum of the component scores MUST exactly equal the overall score after any deductions (max 100).*
 
-Return STRICT JSON only — no markdown, no extra text:
+### Output Format:
+Return a valid JSON object matching this schema. Do not output any preamble, markdown code blocks, or postamble.
 {{
-    "name": "Candidate Full Name or null",
+    "name": "Full Name or null",
     "email": "email@example.com or null",
     "phone": "phone number or null",
-    "score": <0-100 integer>,
+    "score": <0-100 integer representing the sum of component_scores>,
     "component_scores": {{
-        "skills": <0-{sw.get('skills', 40)}>,
-        "experience": <0-{sw.get('experience', 25)}>,
-        "projects": <0-{sw.get('projects', 20)}>,
-        "education": <0-{sw.get('education', 10)}>,
-        "bonus": <0-{sw.get('bonus', 5)}>
+        "skills": <0-{sw.get('skills', 40)} integer>,
+        "experience": <0-{sw.get('experience', 25)} integer>,
+        "projects": <0-{sw.get('projects', 20)} integer>,
+        "education": <0-{sw.get('education', 10)} integer>,
+        "bonus": <0-{sw.get('bonus', 5)} integer>
     }},
     "key_skills_match": ["Skill A", "Skill B"],
     "missing_skills": ["Skill X", "Skill Y"],
-    "reasoning": "2-3 line explanation of the score.",
-    "extracted_role": "Normalized job title e.g. Senior Frontend Engineer"
+    "reasoning": "Professional explanation details: 1) why the candidate received the matching scores, 2) core strengths, 3) notable gaps relative to requirements, and 4) detail any deductions applied (e.g. for missing/placeholder contact details).",
+    "extracted_role": "Normalized job title"
 }}
 """
         return gemini_client.call_gemini(
             prompt=prompt,
-            system_prompt="You are an expert recruitment assistant. Output valid JSON only.",
+            system_prompt="You are a Senior Technical Recruiter and ATS parser. Output valid JSON only.",
             temperature=0.1,
             json_mode=True
         )
@@ -266,6 +275,128 @@ Return STRICT JSON only — no markdown, no extra text:
             return {"score": 0, "reasoning": "Missing API Key", "key_skills_match": [], "missing_skills": []}
         weights = RAGService._get_scoring_weights()
         return RAGService.screen_and_extract(jd_text, resume_context, weights)
+
+    @staticmethod
+    def extract_images_from_pdf(file_path: str) -> list:
+        """
+        Extract images from PDF page by page.
+        Returns a list of PIL Image objects.
+        """
+        import io
+        from PIL import Image
+        import pypdf
+        
+        images = []
+        with open(file_path, 'rb') as f:
+            reader = pypdf.PdfReader(f)
+            for page_num, page in enumerate(reader.pages):
+                if len(images) >= 5:
+                    break
+                for image_file_object in page.images:
+                    if len(images) >= 5:
+                        break
+                    try:
+                        image_data = image_file_object.data
+                        img = Image.open(io.BytesIO(image_data))
+                        img.verify()
+                        img = Image.open(io.BytesIO(image_data))
+                        images.append(img)
+                    except Exception as e:
+                        print(f"Error extracting image on page {page_num}: {e}")
+        return images
+
+    @staticmethod
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=10),
+        retry=retry_if_exception_type(Exception)
+    )
+    def screen_and_extract_from_images(jd_text: str, images: list, weights: dict) -> dict:
+        """
+        Multimodal Gemini call that simultaneously:
+          • Analyzes candidate resume images
+          • Extracts candidate contact info (name, email, phone)
+          • Transcribes resume text for RAG indexing
+          • Scores the resume against the JD using the weighted rubric
+          • Returns extracted_role, skills, reasoning, full_text
+
+        `images` is a list of PIL.Image.Image objects.
+        """
+        import google.generativeai as genai
+        api_key = gemini_client.get_gemini_api_key()
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY not configured in environment.")
+        
+        genai.configure(api_key=api_key)
+        
+        sw = weights
+        prompt = f"""
+### System Instructions:
+You are an advanced Automated Applicant Tracking System (ATS) and Senior Technical Recruiter with vision capabilities. Perform candidate evaluation, text transcription, and data extraction from the CANDIDATE RESUME IMAGES against the provided JOB DESCRIPTION.
+
+### Inputs:
+#### Job Description:
+{jd_text}
+
+### Tasks:
+1. **Resume Transcription**: Perform high-accuracy OCR / transcription of the complete text from all the provided resume images. Capture all bullet points, contact info, headers, and dates verbatim.
+2. **Contact Information Extraction**: Extract the candidate's full name, email address, and phone number from the images.
+   *CRITICAL CONTACT VALIDATION*: Do NOT extract placeholder, dummy, or redacted contact details (e.g. 'xxx@gmail.com', 'XXX-XXX-XXX', '123-456-7890', 'yourname@example.com', etc.). If the resume lacks actual valid contact details, you MUST return null for that field. Do not hallucinate or assume values.
+3. **Role Normalization**: Identify the candidate's primary job title or role from their recent experience.
+4. **Scoring & Evaluation**: Score the candidate's resume strictly against the criteria in the job description using the following weight weights:
+   - **Skills Matching** (Max: {sw.get('skills', 40)} pts): Evaluate core required technologies/methodologies. Match rate determines the score.
+   - **Experience Relevance** (Max: {sw.get('experience', 25)} pts): Assess length of relevant experience, seniority, and matching duties.
+   - **Project / Role Alignment** (Max: {sw.get('projects', 20)} pts): Evaluate technical complexity, achievements, scale, and impact in previous roles/projects.
+   - **Education Match** (Max: {sw.get('education', 10)} pts): Grade degree levels, fields of study, or relevant industry certifications.
+   - **Preferred / Bonus Skills** (Max: {sw.get('bonus', 5)} pts): Look for preferred qualifications or secondary requirements.
+   
+   *ETHICAL SCORING RULES & DEDUCTIONS*:
+   - Critically check for the presence of actual contact details. If a contact detail (like a phone number or email) is completely missing or contains only dummy/placeholder values, apply an incompleteness deduction of **10%** from the overall score to penalize unprofessional resume readiness.
+   - Base the component scores strictly and objectively on the candidate's skills relative to the Job Description and the required keywords (if specified in the JD under 'Required Keywords:'). If the candidate lacks essential required skills or experience, grade them rigorously and lower the scores accordingly.
+   - *Total Score constraint: The sum of the component scores MUST exactly equal the overall score after any deductions (max 100).*
+
+### Output Format:
+Return a valid JSON object matching this schema. Do not output any preamble, markdown code blocks, or postamble.
+{{
+    "name": "Full Name or null",
+    "email": "email@example.com or null",
+    "phone": "phone number or null",
+    "score": <0-100 integer representing the sum of component_scores>,
+    "component_scores": {{
+        "skills": <0-{sw.get('skills', 40)} integer>,
+        "experience": <0-{sw.get('experience', 25)} integer>,
+        "projects": <0-{sw.get('projects', 20)} integer>,
+        "education": <0-{sw.get('education', 10)} integer>,
+        "bonus": <0-{sw.get('bonus', 5)} integer>
+    }},
+    "key_skills_match": ["Skill A", "Skill B"],
+    "missing_skills": ["Skill X", "Skill Y"],
+    "reasoning": "Professional explanation details: 1) why the candidate received the matching scores, 2) core strengths, 3) notable gaps relative to requirements, and 4) detail any deductions applied (e.g. for missing/placeholder contact details).",
+    "extracted_role": "Normalized job title",
+    "full_text": "Complete transcribed text of the resume here."
+}}
+"""
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            system_instruction="You are a Senior Technical Recruiter and ATS parser with vision capabilities. Output valid JSON only.",
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                response_mime_type="application/json",
+            )
+        )
+        
+        contents = [prompt] + images
+        response = model.generate_content(contents)
+        content = response.text.strip()
+        
+        # Clean markdown code blocks if present
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+        if content.endswith("```"):
+            content = content[:-3].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        
+        return json.loads(content)
 
     @staticmethod
     def _get_scoring_weights() -> dict:
@@ -606,28 +737,38 @@ class RagQueryService:
                 role = "HR" if msg.get("role") == "user" else "Assistant"
                 history_str += f"{role}: {msg.get('content', '')}\n"
 
-        prompt = f"""You are an AI hiring assistant. Answer the HR manager's question based ONLY on the resume context below.
-Refer to candidates by their FULL NAME (never by ID number). Use markdown formatting in your response:
-- Use **bold** for candidate names and key skills
-- Use bullet points to list candidates or attributes
-- Use headings (##) only for longer multi-section answers
-- Be concise, specific, and actionable
-If the context doesn't contain enough information, say so clearly.
+        prompt = f"""
+### System Instructions:
+You are an expert AI Recruiting Partner. Your task is to provide objective, precise, and fact-based answers to the HR manager's question based ONLY on the retrieved candidate resume contexts.
 
-RESUME CONTEXT:
+### Context:
+#### Resume Contexts:
 {context}
 
-CONVERSATION HISTORY:
+#### Conversation History:
 {history_str}
-HR QUESTION: {query_text}
 
-ANSWER:"""
+### Question:
+HR Manager's Inquiry: {query_text}
+
+### Constraints & Formatting Guidelines:
+1. **Source Fidelity**: Rely ONLY on the facts present in the provided Resume Contexts. Do not extrapolate, assume, or speculate.
+2. **Identification**: Refer to candidates exclusively by their full name (never by ID numbers or index).
+3. **Format**: Use clean markdown structure:
+   - Bold candidate names and key technical skills (e.g., **Python**, **React**).
+   - Use bullet points for structured listings or comparative bulleted summaries.
+   - Use section headings (`###`) to divide longer comparative or detailed evaluations.
+4. **Tone**: Be professional, direct, objective, and action-oriented.
+5. **Missing Information**: If the contexts do not contain enough facts to answer the question, state that clearly and specify what details are missing.
+
+### Answer:
+"""
 
         try:
             from . import gemini_client
             answer = gemini_client.call_gemini_text(
                 prompt=prompt,
-                system_prompt="You are an expert AI hiring assistant. Reference specific candidates from the context. Be concise and factual.",
+                system_prompt="You are a professional Recruiting Partner. Reference specific candidates from context. Be concise and factual.",
                 temperature=0.3
             )
         except Exception as e:

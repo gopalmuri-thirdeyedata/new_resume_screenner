@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import API_URL from '../apiConfig';
-import { BarChart2, Download, FileText, FileSpreadsheet, Loader2, Eye, X, Search, Trash2 } from 'lucide-react';
+import { BarChart2, Download, FileText, FileSpreadsheet, Loader2, Eye, X, Search, Trash2, AlertTriangle, CheckCircle } from 'lucide-react';
 
 // ─── Utility: Clean phone numbers ────────────────────────────────────────────
 const cleanPhone = (phone) => {
@@ -142,7 +142,148 @@ const exportToWord = (candidates) => {
     URL.revokeObjectURL(url);
 };
 
-// ─── Analysis Modal ──────────────────────────────────────────────────────────
+// ─── Confirm Modal ───────────────────────────────────────────────────────────
+
+const ConfirmModal = ({ title, message, confirmLabel = 'Confirm', danger = false, onConfirm, onCancel }) => (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={onCancel}>
+        <div
+            className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+        >
+            <div className="p-6">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${danger ? 'bg-red-100' : 'bg-yellow-100'}`}>
+                    <AlertTriangle size={24} className={danger ? 'text-red-600' : 'text-yellow-600'} />
+                </div>
+                <h3 className="text-base font-bold text-gray-900 text-center mb-2">{title}</h3>
+                <p className="text-sm text-gray-500 text-center leading-relaxed">{message}</p>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+                <button
+                    onClick={onCancel}
+                    className="flex-1 px-4 py-2.5 text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+                >
+                    Cancel
+                </button>
+                <button
+                    onClick={onConfirm}
+                    className={`flex-1 px-4 py-2.5 text-sm font-semibold text-white rounded-xl transition-colors ${danger ? 'bg-red-600 hover:bg-red-700' : 'bg-[#5d8c2c] hover:bg-[#4a7023]'}`}
+                >
+                    {confirmLabel}
+                </button>
+            </div>
+        </div>
+    </div>
+);
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+
+const Toast = ({ message, type = 'success', onDismiss }) => (
+    <div className={`fixed bottom-6 right-6 z-[70] flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all ${type === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
+        {type === 'success'
+            ? <CheckCircle size={16} className="text-green-600 shrink-0" />
+            : <AlertTriangle size={16} className="text-red-600 shrink-0" />
+        }
+        {message}
+        <button onClick={onDismiss} className="ml-2 opacity-60 hover:opacity-100 transition-opacity">
+            <X size={14} />
+        </button>
+    </div>
+);
+
+// ─── Markdown Renderer Helpers ────────────────────────────────────────────────
+function formatMarkdownText(text) {
+    if (!text) return '';
+    let formatted = text;
+    // Replace " 1. " or ". 1. " with "\n\n1. " for inline numbered lists
+    formatted = formatted.replace(/(?:^|\b|\.|\s)([1-9]\.)\s+\*\*/g, "\n\n$1 **");
+    formatted = formatted.replace(/(?:^|\b|\.|\s)([1-9]\.)\s+([A-Z])/g, "\n\n$1 $2");
+    return formatted.trim();
+}
+
+function renderMarkdown(text) {
+    if (!text) return '';
+    const cleanText = formatMarkdownText(text);
+    const lines = cleanText.split('\n');
+    const result = [];
+    let inList = false;
+    let listItems = [];
+
+    const flushList = () => {
+        if (listItems.length) {
+            result.push(
+                <ul key={`ul-${result.length}`} className="list-disc space-y-1.5 my-2 pl-5">
+                    {listItems.map((item, i) => (
+                        <li key={i} className="text-sm text-gray-700 leading-relaxed">
+                            {parseInline(item)}
+                        </li>
+                    ))}
+                </ul>
+            );
+            listItems = [];
+            inList = false;
+        }
+    };
+
+    lines.forEach((line, idx) => {
+        const trimmed = line.trim();
+
+        // Heading: #, ##, ###, ####
+        const headingMatch = trimmed.match(/^(#{1,4})\s+(.*)$/);
+        if (headingMatch) {
+            flushList();
+            const level = headingMatch[1].length;
+            const content = headingMatch[2];
+            const sizeClass = level === 1 ? "text-lg font-extrabold" : level === 2 ? "text-base font-bold" : "text-sm font-semibold";
+            result.push(
+                <h4 key={idx} className={`${sizeClass} text-gray-900 mt-4 mb-2 pb-1 border-b border-gray-100`}>
+                    {parseInline(content)}
+                </h4>
+            );
+            return;
+        }
+
+        // Bullet
+        if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
+            inList = true;
+            listItems.push(trimmed.slice(2));
+            return;
+        }
+
+        // Non-bullet line
+        if (inList && trimmed === '') {
+            flushList();
+            return;
+        }
+        if (inList && !trimmed.startsWith('* ') && !trimmed.startsWith('- ')) {
+            flushList();
+        }
+
+        if (trimmed === '') {
+            result.push(<div key={idx} className="h-2" />);
+        } else {
+            result.push(
+                <p key={idx} className="leading-relaxed text-sm text-gray-700 mb-2">
+                    {parseInline(trimmed)}
+                </p>
+            );
+        }
+    });
+
+    flushList();
+    return result;
+}
+
+function parseInline(text) {
+    if (!text) return '';
+    const parts = text.split(/\*\*(.*?)\*\*/g);
+    return parts.map((part, i) =>
+        i % 2 === 1
+            ? <strong key={i} className="font-bold text-gray-900">{part}</strong>
+            : part
+    );
+}
+
+// ─── Analysis Modal ───────────────────────────────────────────────────────────
 
 const AnalysisModal = ({ candidate, onClose }) => {
     if (!candidate) return null;
@@ -193,7 +334,9 @@ const AnalysisModal = ({ candidate, onClose }) => {
                     {/* AI Summary */}
                     <div>
                         <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">AI Screening Summary</h4>
-                        <p className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-xl p-4 border border-gray-100">{reasoning}</p>
+                        <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-xl p-4 border border-gray-100 space-y-2">
+                            {renderMarkdown(reasoning)}
+                        </div>
                     </div>
 
                     {/* Matched Skills */}
@@ -251,11 +394,20 @@ const ScreenedCandidates = () => {
     const [analysisCandidate, setAnalysisCandidate] = useState(null);
     const [resumeCandidate, setResumeCandidate] = useState(null);
     const [resetting, setResetting] = useState(false);
+    const [confirmDialog, setConfirmDialog] = useState(null); // { type: 'reset' | 'delete', id?: number }
+    const [toast, setToast] = useState(null); // { message, type }
 
-    const handleReset = async () => {
-        if (!window.confirm("Are you sure you want to delete all screened candidates and reset the screening history? This will also clear the AI search index for these candidates. This action cannot be undone.")) {
-            return;
-        }
+    const showToast = (message, type = 'success') => {
+        setToast({ message, type });
+        setTimeout(() => setToast(null), 4000);
+    };
+
+    const handleReset = () => {
+        setConfirmDialog({ type: 'reset' });
+    };
+
+    const confirmReset = async () => {
+        setConfirmDialog(null);
         setResetting(true);
         try {
             const response = await fetch(`${API_URL}/api/resume/reset-screened/`, {
@@ -264,23 +416,26 @@ const ScreenedCandidates = () => {
             });
             if (response.ok) {
                 setCandidates([]);
-                alert("Screened candidates list has been reset successfully.");
+                showToast('Screened candidates list has been reset successfully.');
             } else {
                 const data = await response.json().catch(() => ({}));
                 throw new Error(data.detail || `Server returned ${response.status}`);
             }
         } catch (err) {
             console.error('Failed to reset candidates', err);
-            alert(`Error resetting candidates: ${err.message}`);
+            showToast(`Error resetting candidates: ${err.message}`, 'error');
         } finally {
             setResetting(false);
         }
     };
 
-    const handleDeleteIndividual = async (id) => {
-        if (!window.confirm("Are you sure you want to delete this candidate? This action cannot be undone.")) {
-            return;
-        }
+    const handleDeleteIndividual = (id) => {
+        setConfirmDialog({ type: 'delete', id });
+    };
+
+    const confirmDelete = async () => {
+        const id = confirmDialog.id;
+        setConfirmDialog(null);
         try {
             const response = await fetch(`${API_URL}/api/resume/candidates/${id}/`, {
                 method: 'DELETE',
@@ -288,13 +443,14 @@ const ScreenedCandidates = () => {
             });
             if (response.ok) {
                 setCandidates(prev => prev.filter(c => c.id !== id));
+                showToast('Candidate deleted successfully.');
             } else {
                 const data = await response.json().catch(() => ({}));
                 throw new Error(data.detail || `Server returned ${response.status}`);
             }
         } catch (err) {
             console.error('Failed to delete candidate', err);
-            alert(`Error deleting candidate: ${err.message}`);
+            showToast(`Error deleting candidate: ${err.message}`, 'error');
         }
     };
 
@@ -343,7 +499,7 @@ const ScreenedCandidates = () => {
         if (candidate.resume_file) {
             setResumeCandidate(candidate);
         } else {
-            alert('Resume file not available for this candidate.');
+            showToast('Resume file not available for this candidate.', 'error');
         }
     };
 
@@ -531,6 +687,33 @@ const ScreenedCandidates = () => {
             {/* ── Analysis Modal ── */}
             {analysisCandidate && (
                 <AnalysisModal candidate={analysisCandidate} onClose={() => setAnalysisCandidate(null)} />
+            )}
+
+            {/* ── Confirm Dialogs ── */}
+            {confirmDialog?.type === 'reset' && (
+                <ConfirmModal
+                    title="Reset All Candidates?"
+                    message="This will delete all screened candidates and clear the AI search index. This action cannot be undone."
+                    confirmLabel="Reset All"
+                    danger
+                    onConfirm={confirmReset}
+                    onCancel={() => setConfirmDialog(null)}
+                />
+            )}
+            {confirmDialog?.type === 'delete' && (
+                <ConfirmModal
+                    title="Delete Candidate?"
+                    message="This will permanently remove this candidate from the screened list. This action cannot be undone."
+                    confirmLabel="Delete"
+                    danger
+                    onConfirm={confirmDelete}
+                    onCancel={() => setConfirmDialog(null)}
+                />
+            )}
+
+            {/* ── Toast ── */}
+            {toast && (
+                <Toast message={toast.message} type={toast.type} onDismiss={() => setToast(null)} />
             )}
 
             {/* ── Resume Viewer Modal ── */}

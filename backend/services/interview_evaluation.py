@@ -58,33 +58,41 @@ def evaluate_interview_transcript(transcript: list, candidate_name: str, role: s
         conversation = str(transcript)
     
     evaluation_prompt = f"""
-You are an expert technical recruiter evaluating an interview transcript.
+### System Instructions:
+You are an expert technical interviewer and candidate evaluator. Your task is to analyze the interview transcript and evaluate the candidate's performance objectively and rigorously.
 
-CANDIDATE: {candidate_name}
-ROLE: {role}
-RESUME SUMMARY: {resume_summary if resume_summary else "Not provided"}
+### Candidate Details:
+- Candidate Name: {candidate_name}
+- Target Role: {role}
+- Resume Summary Reference: {resume_summary if resume_summary else "Not provided"}
 
-TRANSCRIPT:
+### Interview Transcript:
 {conversation}
 
-Analyze the candidate's performance and provide scores (0-100) for:
-1. Technical Accuracy - Correctness and depth of technical answers
-2. Communication Clarity - Ability to explain concepts clearly
-3. Problem-Solving Approach - Logical thinking and methodology
-4. Depth of Knowledge - Understanding beyond surface level
+### Evaluation Criteria (0-100 scale):
+1. **Technical Accuracy**: Correctness, precision, and depth of technical answers.
+2. **Communication Clarity**: Ability to explain complex concepts clearly, structure thoughts, and articulate answers.
+3. **Problem-Solving Approach**: Logical thinking, structured approach to problems, and technical methodology.
+4. **Depth of Knowledge**: Understanding of fundamental concepts, best practices, and standard patterns beyond surface-level terminology.
 
-Also provide:
-- Overall Score (weighted average: 40% Technical, 25% Communication, 20% Problem-Solving, 15% Depth)
-- Brief feedback (2-3 sentences)
+### Tasks:
+- Score each candidate criteria on a scale of 0 to 100.
+- Calculate the **Overall Score** using this weighted average:
+  - Technical Accuracy: 40%
+  - Communication Clarity: 25%
+  - Problem-Solving Approach: 20%
+  - Depth of Knowledge: 15%
+- Provide a concise, professional, and specific summary feedback (2-3 sentences max) detailing key strengths and areas of growth.
 
-Return ONLY valid JSON in this exact format:
+### Output Format:
+Return a valid JSON object matching this schema. Do not output any preamble, markdown code blocks, or postamble.
 {{
-    "technical_accuracy": 85,
-    "communication_clarity": 90,
-    "problem_solving": 88,
-    "depth_of_knowledge": 82,
-    "overall_score": 86.25,
-    "feedback": "Brief evaluation summary here"
+    "technical_accuracy": <0-100 integer>,
+    "communication_clarity": <0-100 integer>,
+    "problem_solving": <0-100 integer>,
+    "depth_of_knowledge": <0-100 integer>,
+    "overall_score": <0-100 float representing the weighted average>,
+    "feedback": "Professional summary feedback here."
 }}
 """
     

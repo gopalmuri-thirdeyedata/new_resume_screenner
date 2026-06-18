@@ -3,7 +3,8 @@ import { useDropzone } from 'react-dropzone';
 import {
     Upload, FileText, Brain, Loader2, CheckCircle, AlertCircle,
     Filter, ChevronRight, X, Sparkles, ChevronDown, ChevronUp,
-    Search, Play, Minus, ArrowRight, FolderOpen, FilePlus, Cloud, HardDrive
+    Search, Play, Minus, ArrowRight, FolderOpen, FilePlus, Cloud, HardDrive,
+    Tag, Sliders
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import API_URL from '../apiConfig';
@@ -184,6 +185,36 @@ const ResumeScreening = () => {
     // Screening Settings
     const [shortlistCount, setShortlistCount] = useState(5);
 
+    // Keyword Matching State
+    const [keywords, setKeywords] = useState([]);
+    const [keywordInput, setKeywordInput] = useState('');
+    const presetSkills = ["Python", "JavaScript", "React", "Node.js", "SQL", "Docker", "AWS", "Machine Learning", "FastAPI"];
+
+    // Custom Upload Modals State
+    const [showLocalModal, setShowLocalModal] = useState(false);
+    const [showOneDriveModal, setShowOneDriveModal] = useState(false);
+
+    const handleAddKeyword = () => {
+        const clean = keywordInput.trim().toLowerCase();
+        if (clean && !keywords.includes(clean)) {
+            setKeywords(prev => [...prev, clean]);
+        }
+        setKeywordInput('');
+    };
+
+    const handleRemoveKeyword = (kw) => {
+        setKeywords(prev => prev.filter(k => k !== kw));
+    };
+
+    const handleTogglePreset = (skill) => {
+        const lower = skill.toLowerCase();
+        if (keywords.includes(lower)) {
+            handleRemoveKeyword(lower);
+        } else {
+            setKeywords(prev => [...prev, lower]);
+        }
+    };
+
     // Screening State
     const [isScreening, setIsScreening] = useState(false);
     const [batchStatus, setBatchStatus] = useState('idle'); // idle | queued | processing | completed | failed
@@ -196,6 +227,13 @@ const ResumeScreening = () => {
     const [promoteSuccess, setPromoteSuccess] = useState(false);
 
     // Validation
+    const handleConfirmUpload = (newFiles) => {
+        setFiles(prev => {
+            const existing = new Set(prev.map(f => f.name));
+            return [...prev, ...newFiles.filter(f => !existing.has(f.name))];
+        });
+    };
+
     const handleFolderUpload = (e) => {
         const folderFiles = Array.from(e.target.files).filter(f =>
             f.name.endsWith('.pdf') || f.name.endsWith('.doc') || f.name.endsWith('.docx')
@@ -292,6 +330,9 @@ const ResumeScreening = () => {
         const formData = new FormData();
         formData.append('job_description', jobDescription);
         formData.append('top_n', shortlistCount);
+        if (keywords.length > 0) {
+            formData.append('keywords', keywords.join(', '));
+        }
         for (let i = 0; i < files.length; i++) {
             formData.append('files', files[i]);
         }
@@ -410,152 +451,231 @@ const ResumeScreening = () => {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-180px)]">
 
                 {/* LEFT COLUMN: Inputs & Upload (Sticky & Scrollable) */}
-                <div className="lg:col-span-4 space-y-4 flex flex-col h-full overflow-hidden">
-                    {/* JD Input */}
-                    <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm flex-shrink-0 hover:shadow-md transition-shadow duration-300">
-                        <div className="flex justify-between items-center mb-3">
-                            <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight">
-                                <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
-                                    <FileText size={14} className="text-[#5d8c2c]" />
+                <div className="lg:col-span-4 flex flex-col h-full overflow-hidden">
+                    <div className="flex flex-col space-y-4 overflow-y-auto pr-1 pb-4 flex-1 custom-scrollbar">
+                        {/* Card 1: Job Description */}
+                        <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow duration-300 flex flex-col">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight">
+                                    <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
+                                        <FileText size={14} className="text-[#5d8c2c]" />
+                                    </div>
+                                    Job Description *
+                                </h3>
+                                <div className="flex items-center gap-2">
+                                    {/* JD File Upload */}
+                                    <button
+                                        onClick={() => jdFileInputRef.current?.click()}
+                                        title="Upload JD from file (PDF, DOC, TXT)"
+                                        className="text-xs font-semibold text-white flex items-center gap-1.5 bg-gradient-to-r from-[#5d8c2c] to-[#4a7a1f] px-3 py-1.5 rounded-lg hover:shadow-md hover:shadow-green-200/50 hover:-translate-y-0.5 transition-all duration-200"
+                                    >
+                                        <FilePlus size={12} /> Upload File
+                                    </button>
+                                    <input
+                                        ref={jdFileInputRef}
+                                        type="file"
+                                        accept=".pdf,.doc,.docx,.txt"
+                                        onChange={handleJDFileUpload}
+                                        className="hidden"
+                                    />
+                                    <button onClick={() => setJobDescription('')} className="text-xs text-gray-400 hover:text-red-500 font-medium transition-colors">Clear</button>
                                 </div>
-                                Job Description
-                            </h3>
-                            <div className="flex items-center gap-2">
-                                {/* JD File Upload */}
-                                <button
-                                    onClick={() => jdFileInputRef.current?.click()}
-                                    title="Upload JD from file (PDF, DOC, TXT)"
-                                    className="text-xs font-semibold text-white flex items-center gap-1.5 bg-gradient-to-r from-[#5d8c2c] to-[#4a7a1f] px-3 py-1.5 rounded-lg hover:shadow-md hover:shadow-green-200/50 hover:-translate-y-0.5 transition-all duration-200"
-                                >
-                                    <FilePlus size={12} /> Upload File
-                                </button>
-                                <input
-                                    ref={jdFileInputRef}
-                                    type="file"
-                                    accept=".pdf,.doc,.docx,.txt"
-                                    onChange={handleJDFileUpload}
-                                    className="hidden"
-                                />
-                                <button onClick={() => setJobDescription('')} className="text-xs text-gray-400 hover:text-red-500 font-medium transition-colors">Clear</button>
                             </div>
-                        </div>
-                        <textarea
-                            value={jobDescription}
-                            onChange={(e) => setJobDescription(e.target.value)}
-                            placeholder={`Paste or type job description here...`}
-                            className="w-full h-32 bg-gray-50/80 border border-gray-200 rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#5d8c2c]/30 focus:border-[#5d8c2c]/50 resize-none transition-all placeholder:text-gray-400"
-                        />
-                    </div>
-
-                    {/* Upload Zone */}
-                    <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm flex flex-col flex-1 min-h-0 hover:shadow-md transition-shadow duration-300">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight">
-                                <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
-                                    <Upload size={14} className="text-[#5d8c2c]" />
-                                </div>
-                                Upload Resumes
-                            </h3>
-                            {/* Folder Upload Button with Dropdown */}
-                            <div className="relative">
-                                <button
-                                    onClick={() => setShowFolderMenu(v => !v)}
-                                    title="Upload entire folder of resumes"
-                                    className="text-xs font-semibold text-white flex items-center gap-1.5 bg-gradient-to-r from-[#5d8c2c] to-[#4a7a1f] px-3 py-1.5 rounded-lg hover:shadow-md hover:shadow-green-200/50 hover:-translate-y-0.5 transition-all duration-200"
-                                >
-                                    <FolderOpen size={12} /> Folder Upload <ChevronDown size={10} />
-                                </button>
-
-                                {/* Dropdown Menu */}
-                                {showFolderMenu && (
-                                    <>
-                                        {/* Backdrop to close menu */}
-                                        <div className="fixed inset-0 z-40" onClick={() => setShowFolderMenu(false)} />
-                                        <div className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                            <div className="p-1.5 space-y-0.5">
-                                                <button
-                                                    onClick={() => {
-                                                        setShowFolderMenu(false);
-                                                        alert('OneDrive integration coming soon! Please use local folder upload for now.');
-                                                    }}
-                                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
-                                                >
-                                                    <Cloud size={16} className="text-blue-500" />
-                                                    OneDrive
-                                                </button>
-                                                <button
-                                                    onClick={() => {
-                                                        setShowFolderMenu(false);
-                                                        folderInputRef.current?.click();
-                                                    }}
-                                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors"
-                                                >
-                                                    <HardDrive size={16} className="text-green-600" />
-                                                    From Local
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                            {/* Hidden folder input */}
-                            <input
-                                ref={folderInputRef}
-                                type="file"
-                                webkitdirectory="true"
-                                multiple
-                                accept=".pdf,.doc,.docx"
-                                onChange={handleFolderUpload}
-                                className="hidden"
+                            <textarea
+                                value={jobDescription}
+                                onChange={(e) => setJobDescription(e.target.value)}
+                                placeholder="Paste or type job description here... (Mandatory)"
+                                className="w-full h-32 bg-gray-50/80 border border-gray-200 rounded-xl p-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#5d8c2c]/30 focus:border-[#5d8c2c]/50 resize-none transition-all placeholder:text-gray-400"
                             />
                         </div>
 
-                        <div
-                            {...getRootProps()}
-                            className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 group ${files.length > 0 ? 'p-3' : 'p-8'} ${isDragActive ? 'border-[#5d8c2c] bg-green-50/80 scale-[1.01]' : 'border-gray-300 hover:border-[#5d8c2c]/60 hover:bg-green-50/30'}`}
-                        >
-                            <input {...getInputProps()} />
-                            {files.length === 0 ? (
-                                <>
-                                    <div className="w-12 h-12 bg-gradient-to-br from-green-100 to-green-50 text-[#5d8c2c] rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 group-hover:shadow-md group-hover:shadow-green-100 transition-all duration-300">
-                                        <Upload size={20} />
+                        {/* Card 2: Keyword Matching */}
+                        <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow duration-300 flex flex-col">
+                            <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight mb-3">
+                                <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
+                                    <Tag size={14} className="text-[#5d8c2c]" />
+                                </div>
+                                Keyword Matching
+                            </h3>
+                            <p className="text-[11px] text-gray-500 font-medium mb-3 leading-relaxed">
+                                Type custom keywords or select predefined skills. Matches will be required (minimum 20% match score).
+                            </p>
+                            
+                            {/* Keyword Input */}
+                            <div className="flex gap-2 mb-3">
+                                <input
+                                    type="text"
+                                    value={keywordInput}
+                                    onChange={(e) => setKeywordInput(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            handleAddKeyword();
+                                        }
+                                    }}
+                                    placeholder="Type a keyword & press Enter"
+                                    className="flex-1 px-3 py-1.5 bg-gray-50/80 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#5d8c2c]/30 focus:border-[#5d8c2c]/50"
+                                />
+                                <button
+                                    onClick={handleAddKeyword}
+                                    className="text-xs font-semibold text-white bg-[#5d8c2c] px-3 py-1.5 rounded-lg hover:bg-[#4a7a1f] transition-colors"
+                                >
+                                    Add
+                                </button>
+                            </div>
+
+                            {/* Presets Grid */}
+                            <div className="mb-3">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block mb-1.5">Common Preset Skills</span>
+                                <div className="flex flex-wrap gap-1.5 max-h-16 overflow-y-auto pr-1">
+                                    {presetSkills.map(skill => {
+                                        const hasSkill = keywords.includes(skill.toLowerCase());
+                                        return (
+                                            <button
+                                                key={skill}
+                                                onClick={() => handleTogglePreset(skill)}
+                                                className={`text-[10px] px-2 py-0.5 rounded-full font-medium transition-all ${
+                                                    hasSkill
+                                                        ? 'bg-[#5d8c2c] text-white'
+                                                        : 'bg-gray-100 text-gray-650 hover:bg-gray-200'
+                                                }`}
+                                            >
+                                                {skill}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Selected Chips */}
+                            <div className="overflow-y-auto pr-1">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block mb-1.5">Active Keywords ({keywords.length})</span>
+                                {keywords.length === 0 ? (
+                                    <p className="text-xs text-gray-400 italic">No keywords added. Matching will be skipped.</p>
+                                ) : (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {keywords.map(kw => (
+                                            <span
+                                                key={kw}
+                                                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-lg font-medium"
+                                            >
+                                                {kw}
+                                                <button onClick={() => handleRemoveKeyword(kw)} className="hover:text-red-500 transition-colors">
+                                                    <X size={10} />
+                                                </button>
+                                            </span>
+                                        ))}
                                     </div>
-                                    <p className="text-sm font-semibold text-gray-700">Click or drag files here</p>
-                                    <p className="text-xs text-gray-400 mt-1">Supports PDF, DOC, DOCX</p>
-                                </>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Card 3: Upload Resumes */}
+                        <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm flex flex-col hover:shadow-md transition-shadow duration-300">
+                            <div className="flex items-center justify-between mb-3">
+                                <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight">
+                                    <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
+                                        <Upload size={14} className="text-[#5d8c2c]" />
+                                    </div>
+                                    Upload Resumes
+                                </h3>
+                                {/* Folder Upload Button with Dropdown */}
+                                <div className="relative">
+                                    <button
+                                        onClick={() => setShowFolderMenu(v => !v)}
+                                        title="Upload resumes from local storage or cloud"
+                                        className="text-xs font-semibold text-white flex items-center gap-1.5 bg-gradient-to-r from-[#5d8c2c] to-[#4a7a1f] px-3 py-1.5 rounded-lg hover:shadow-md hover:shadow-green-200/50 hover:-translate-y-0.5 transition-all duration-200"
+                                    >
+                                        <FolderOpen size={12} /> Folder Upload <ChevronDown size={10} />
+                                    </button>
+
+                                    {/* Dropdown Menu */}
+                                    {showFolderMenu && (
+                                        <>
+                                            {/* Backdrop to close menu */}
+                                            <div className="fixed inset-0 z-45" onClick={() => setShowFolderMenu(false)} />
+                                            <div className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                <div className="p-1.5 space-y-0.5">
+                                                    <button
+                                                        onClick={() => {
+                                                            setShowFolderMenu(false);
+                                                            setShowOneDriveModal(true);
+                                                        }}
+                                                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors text-left"
+                                                    >
+                                                        <Cloud size={16} className="text-blue-500" />
+                                                        OneDrive
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            setShowFolderMenu(false);
+                                                            setShowLocalModal(true);
+                                                        }}
+                                                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors text-left"
+                                                    >
+                                                        <HardDrive size={16} className="text-green-600" />
+                                                        From Local
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div
+                                {...getRootProps()}
+                                className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 group ${files.length > 0 ? 'p-3' : 'p-8'} ${isDragActive ? 'border-[#5d8c2c] bg-green-50/80 scale-[1.01]' : 'border-gray-300 hover:border-[#5d8c2c]/60 hover:bg-green-50/30'} flex-shrink-0`}
+                            >
+                                <input {...getInputProps()} />
+                                {files.length === 0 ? (
+                                    <>
+                                        <div className="w-12 h-12 bg-gradient-to-br from-green-100 to-green-50 text-[#5d8c2c] rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 group-hover:shadow-md group-hover:shadow-green-100 transition-all duration-300">
+                                            <Upload size={20} />
+                                        </div>
+                                        <p className="text-sm font-semibold text-gray-700">Click or drag files here</p>
+                                        <p className="text-xs text-gray-400 mt-1">Supports PDF, DOC, DOCX</p>
+                                    </>
+                                ) : (
+                                    <div className="flex items-center gap-2 text-xs text-gray-500 font-medium">
+                                        <Upload size={14} className="text-[#5d8c2c]" />
+                                        <span>Click or drag to add more files</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* File Queue - Internal Scroll */}
+                            {files.length > 0 ? (
+                                <div className="mt-3 flex flex-col overflow-hidden">
+                                    <div className="flex justify-between text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">
+                                        <span>{files.length} files queued</span>
+                                        <button onClick={() => setFiles([])} className="text-red-500 hover:underline normal-case">Remove All</button>
+                                    </div>
+                                    <div className="overflow-y-auto custom-scrollbar max-h-40 space-y-1.5 pr-1">
+                                        {files.map((file, idx) => (
+                                            <div key={idx} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg text-xs border border-gray-100">
+                                                <div className="flex items-center gap-2 overflow-hidden">
+                                                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${idx < batchCompleted ? 'bg-green-500' : isScreening ? 'bg-amber-400 animate-pulse' : 'bg-gray-300'}`} />
+                                                    <span className="truncate max-w-[180px] font-medium text-gray-700">{file.name}</span>
+                                                </div>
+                                                {isScreening && <Loader2 size={12} className="animate-spin text-green-600 shrink-0" />}
+                                                {!isScreening && (
+                                                    <button onClick={() => setFiles(files.filter(f => f !== file))} className="text-gray-400 hover:text-red-500 p-0.5">
+                                                        <X size={14} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
                             ) : (
-                                <div className="flex items-center gap-2 text-xs text-gray-500 font-medium">
-                                    <Upload size={14} className="text-[#5d8c2c]" />
-                                    <span>Click or drag to add more files</span>
+                                <div className="flex items-center justify-center text-center p-4">
+                                    <p className="text-xs text-gray-400 italic">No files selected. Drag resumes here or click Folder Upload.</p>
                                 </div>
                             )}
                         </div>
 
-                        {/* File Queue - Internal Scroll */}
-                        {files.length > 0 && (
-                            <div className="mt-3 flex-1 min-h-0 flex flex-col">
-                                <div className="flex justify-between text-xs text-gray-500 font-medium mb-2">
-                                    <span>{files.length} files queued</span>
-                                    <button onClick={() => setFiles([])} className="text-red-500 hover:underline">Remove All</button>
-                                </div>
-                                <div className="overflow-y-auto custom-scrollbar flex-1 min-h-[120px] space-y-1.5 pr-1">
-                                    {files.map((file, idx) => (
-                                        <div key={idx} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg text-xs border border-gray-100">
-                                            <div className="flex items-center gap-2 overflow-hidden">
-                                                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${idx < batchCompleted ? 'bg-green-500' : isScreening ? 'bg-amber-400 animate-pulse' : 'bg-gray-300'}`} />
-                                                <span className="truncate max-w-[180px] font-medium text-gray-700">{file.name}</span>
-                                            </div>
-                                            {isScreening && <Loader2 size={12} className="animate-spin text-green-600" />}
-                                            {!isScreening && (
-                                                <button onClick={() => setFiles(files.filter(f => f !== file))} className="text-gray-400 hover:text-red-500 p-0.5">
-                                                    <X size={14} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+
                     </div>
                 </div>
 
@@ -580,17 +700,28 @@ const ResumeScreening = () => {
 
                         </div>
 
-                        {/* Row 2: Top-N input + Start Screening button */}
+                        {/* Row 2: Start Screening button */}
                         <div className="flex items-center justify-end gap-3">
-                            {/* Shortlist Setting */}
-                            <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200" title="Top candidates to return">
-                                <span className="text-xs font-bold text-gray-500">Top:</span>
+                            {/* Shortlist Setting inline */}
+                            <div className="flex items-center gap-3 bg-gray-50 px-4 py-2 rounded-xl border border-gray-200" title="Top candidates to return">
+                                <div className="flex items-center gap-1.5 text-gray-655">
+                                    <Sliders size={14} className="text-[#5d8c2c]" />
+                                    <span className="text-xs font-bold whitespace-nowrap">Shortlist:</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="1"
+                                    max={files.length > 0 ? files.length : 20}
+                                    value={shortlistCount}
+                                    onChange={(e) => setShortlistCount(parseInt(e.target.value) || 1)}
+                                    className="w-24 accent-[#5d8c2c] cursor-pointer h-1.5 bg-gray-200 rounded-lg appearance-none"
+                                />
                                 <input
                                     type="number"
                                     min="1"
                                     value={shortlistCount}
-                                    onChange={(e) => setShortlistCount(parseInt(e.target.value) || 0)}
-                                    className={`w-10 bg-transparent text-center text-sm font-bold focus:outline-none ${isCountInvalid ? 'text-red-600' : 'text-gray-900'}`}
+                                    onChange={(e) => setShortlistCount(parseInt(e.target.value) || 1)}
+                                    className={`w-10 bg-white border border-gray-200 rounded text-center text-xs font-bold py-0.5 focus:outline-none focus:ring-1 focus:ring-[#5d8c2c] ${isCountInvalid ? 'text-red-650 border-red-300' : 'text-gray-900'}`}
                                 />
                             </div>
 
@@ -657,6 +788,240 @@ const ResumeScreening = () => {
                     </div>
                 </div>
             </div>
+            
+            {/* Custom Upload Modals */}
+            <AnimatePresence>
+                {showLocalModal && (
+                    <LocalUploadModal
+                        isOpen={showLocalModal}
+                        onClose={() => setShowLocalModal(false)}
+                        onUpload={handleConfirmUpload}
+                    />
+                )}
+                {showOneDriveModal && (
+                    <OneDriveModal
+                        isOpen={showOneDriveModal}
+                        onClose={() => setShowOneDriveModal(false)}
+                    />
+                )}
+            </AnimatePresence>
+        </div>
+    );
+};
+
+// --- Custom Modals for Uploading ---
+const LocalUploadModal = ({ isOpen, onClose, onUpload }) => {
+    const [tempFiles, setTempFiles] = useState([]);
+    const browseInputRef = useRef(null);
+
+    const addFiles = useCallback((incoming) => {
+        const allowedExtensions = ['.pdf', '.doc', '.docx'];
+        const filtered = incoming.filter(file => {
+            const name = file.name || '';
+            const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
+            return allowedExtensions.includes(ext);
+        });
+        setTempFiles(prev => {
+            const existing = new Set(prev.map(f => f.name));
+            return [...prev, ...filtered.filter(f => !existing.has(f.name))];
+        });
+    }, []);
+
+    const getFilesFromEvent = async (event) => {
+        const files = [];
+        const isDrop = event.type === 'drop';
+        const items = isDrop ? event.dataTransfer.items : event.target.files;
+
+        if (isDrop && items) {
+            const scan = async (entry) => {
+                if (entry.isFile) {
+                    const file = await new Promise((resolve) => entry.file(resolve));
+                    files.push(file);
+                } else if (entry.isDirectory) {
+                    const reader = entry.createReader();
+                    const readEntries = () => new Promise((resolve) => reader.readEntries(resolve));
+                    let entries = await readEntries();
+                    while (entries.length > 0) {
+                        for (const child of entries) {
+                            await scan(child);
+                        }
+                        entries = await readEntries();
+                    }
+                }
+            };
+
+            for (const item of items) {
+                const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+                if (entry) {
+                    await scan(entry);
+                } else {
+                    const file = item.getAsFile ? item.getAsFile() : null;
+                    if (file) files.push(file);
+                }
+            }
+        } else if (items) {
+            for (let i = 0; i < items.length; i++) {
+                files.push(items[i]);
+            }
+        }
+        return files;
+    };
+
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({
+        onDrop: addFiles,
+        getFilesFromEvent,
+        noClick: true,
+    });
+
+    const handleBrowseChange = (e) => {
+        const selected = Array.from(e.target.files || []);
+        addFiles(selected);
+        e.target.value = '';
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white rounded-2xl border border-gray-200 shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]"
+            >
+                {/* Modal Header */}
+                <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                    <div>
+                        <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2">
+                            <Upload size={18} className="text-[#5d8c2c]" />
+                            Folder Upload
+                        </h3>
+                        <p className="text-xs text-gray-500 mt-1 font-medium">Drag a folder into the area below, or browse individual files</p>
+                    </div>
+                    <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+                        <X size={20} />
+                    </button>
+                </div>
+
+                {/* Modal Content */}
+                <div className="p-6 flex-1 overflow-y-auto space-y-4">
+                    {/* Hidden browse-files input (no webkitdirectory — avoids browser security dialog) */}
+                    <input
+                        ref={browseInputRef}
+                        type="file"
+                        multiple
+                        accept=".pdf,.doc,.docx"
+                        onChange={handleBrowseChange}
+                        className="hidden"
+                    />
+
+                    <div
+                        {...getRootProps()}
+                        className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-all duration-300 ${isDragActive ? 'border-[#5d8c2c] bg-green-50/55 scale-[1.01]' : 'border-gray-300'}`}
+                    >
+                        <input {...getInputProps()} />
+                        <div className="w-12 h-12 bg-green-50 text-[#5d8c2c] rounded-xl flex items-center justify-center mb-3">
+                            <FolderOpen size={24} />
+                        </div>
+                        <p className="text-sm font-bold text-gray-800">
+                            {isDragActive ? 'Drop folder here…' : 'Drag & drop a folder here'}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1 mb-4">All PDF, DOC, DOCX files inside will be added</p>
+                        <div className="flex items-center gap-3 w-full max-w-xs">
+                            <div className="flex-1 h-px bg-gray-200" />
+                            <span className="text-xs text-gray-400 font-medium">or</span>
+                            <div className="flex-1 h-px bg-gray-200" />
+                        </div>
+                        <button
+                            onClick={() => browseInputRef.current?.click()}
+                            className="mt-4 text-xs font-semibold text-[#5d8c2c] border border-[#5d8c2c]/40 px-4 py-2 rounded-lg hover:bg-green-50 transition-colors"
+                        >
+                            Browse Individual Files
+                        </button>
+                    </div>
+
+                    {tempFiles.length > 0 && (
+                        <div className="space-y-2">
+                            <div className="flex justify-between text-xs text-gray-500 font-bold">
+                                <span>{tempFiles.length} files selected</span>
+                                <button onClick={() => setTempFiles([])} className="text-red-500 hover:underline">Clear All</button>
+                            </div>
+                            <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1 border border-gray-100 rounded-lg p-2 bg-gray-50/50">
+                                {tempFiles.map((file, idx) => (
+                                    <div key={idx} className="flex items-center justify-between p-2 bg-white rounded-lg text-xs border border-gray-200">
+                                        <div className="flex items-center gap-2 overflow-hidden">
+                                            <FileText size={14} className="text-green-600 shrink-0" />
+                                            <span className="truncate font-medium text-gray-700">{file.name}</span>
+                                        </div>
+                                        <button onClick={() => setTempFiles(tempFiles.filter(f => f !== file))} className="text-gray-400 hover:text-red-500 p-0.5">
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Modal Footer */}
+                <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                    <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                        Cancel
+                    </button>
+                    <button
+                        onClick={() => {
+                            onUpload(tempFiles);
+                            setTempFiles([]);
+                            onClose();
+                        }}
+                        disabled={tempFiles.length === 0}
+                        className={`px-5 py-2 text-sm font-semibold rounded-lg text-white transition-all ${tempFiles.length === 0 ? 'bg-gray-300 cursor-not-allowed' : 'bg-[#5d8c2c] hover:bg-[#4c7524]'}`}
+                    >
+                        Upload Selected
+                    </button>
+                </div>
+            </motion.div>
+        </div>
+    );
+};
+
+const OneDriveModal = ({ isOpen, onClose }) => {
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white rounded-2xl border border-gray-200 shadow-2xl w-full max-w-sm overflow-hidden flex flex-col"
+            >
+                <div className="p-5 border-b border-gray-100 flex justify-between items-center">
+                    <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
+                        <Cloud size={18} className="text-blue-500" />
+                        OneDrive Upload
+                    </h3>
+                    <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+                        <X size={20} />
+                    </button>
+                </div>
+                <div className="p-6 text-center space-y-4">
+                    <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mx-auto">
+                        <Cloud size={32} />
+                    </div>
+                    <div>
+                        <h4 className="font-bold text-gray-900 text-sm">OneDrive integration coming soon</h4>
+                        <p className="text-xs text-gray-500 mt-2 leading-relaxed">
+                            We are currently implementing the secure Microsoft API connection. Please use Local Storage upload for now.
+                        </p>
+                    </div>
+                </div>
+                <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-center">
+                    <button onClick={onClose} className="px-6 py-2 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors">
+                        Okay
+                    </button>
+                </div>
+            </motion.div>
         </div>
     );
 };

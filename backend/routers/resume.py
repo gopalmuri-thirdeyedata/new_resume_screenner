@@ -28,14 +28,26 @@ def get_keyword_score(resume_text: str, jd_text: str):
     resume_text_lower = resume_text.lower()
     jd_text_lower = jd_text.lower()
     
-    # Extract matching skills from JD
-    required_skills = [skill for skill in COMMON_SKILLS if skill in jd_text_lower]
-    if not required_skills:
-        # Fallback: extract clean words from JD
-        words = re.findall(r'\b\w{3,15}\b', jd_text_lower)
-        stopwords = {'and', 'the', 'for', 'with', 'you', 'are', 'our', 'will', 'that', 'this', 'work', 'join', 'team', 'role', 'about', 'from', 'have', 'need', 'must'}
-        required_skills = list(set(words) - stopwords)[:15]
-        
+    custom_keywords = []
+    has_custom = False
+    if "required keywords:" in jd_text_lower:
+        has_custom = True
+        parts = jd_text_lower.split("required keywords:")
+        if len(parts) > 1:
+            kw_section = parts[-1].strip()
+            custom_keywords = [k.strip() for k in re.split(r'[,\n]', kw_section) if k.strip()]
+            
+    if has_custom:
+        required_skills = custom_keywords
+    else:
+        # Extract matching skills from JD
+        required_skills = [skill for skill in COMMON_SKILLS if skill in jd_text_lower]
+        if not required_skills:
+            # Fallback: extract clean words from JD
+            words = re.findall(r'\b\w{3,15}\b', jd_text_lower)
+            stopwords = {'and', 'the', 'for', 'with', 'you', 'are', 'our', 'will', 'that', 'this', 'work', 'join', 'team', 'role', 'about', 'from', 'have', 'need', 'must'}
+            required_skills = list(set(words) - stopwords)[:15]
+            
     if not required_skills:
         return 0.0, [], []
         
@@ -165,6 +177,7 @@ def run_llm_screening(candidate_data: dict, job_description: str, jd_title: str)
 async def screen_resume(
     files: List[UploadFile] = File(...),
     job_description: Optional[str] = Form(None),
+    keywords: Optional[str] = Form(None),
     top_n: Optional[int] = Form(10),
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
@@ -174,6 +187,10 @@ async def screen_resume(
 
     if not job_description or not job_description.strip():
         raise HTTPException(status_code=400, detail="Job Description is required.")
+
+    final_jd = job_description
+    if keywords and keywords.strip():
+        final_jd = job_description + f"\n\nRequired Keywords: {keywords}"
 
     candidate_count = db.query(models.Candidate).count()
     MAX_CANDIDATES = 50
@@ -204,7 +221,7 @@ async def screen_resume(
             batch_id=batch_id,
             filename=safe_filename,
             file_path=file_location,
-            jd_text=job_description,
+            jd_text=final_jd,
             top_n=top_n,
             status="pending",
             created_by=current_user.id

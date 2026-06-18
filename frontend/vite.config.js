@@ -13,6 +13,9 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    watch: {
+      usePolling: true,
+    },
     proxy: {
       // Proxy all /api/* and /media/* calls to the backend container
       // so the browser never crosses origins → no CORS needed
