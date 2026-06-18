@@ -1,0 +1,296 @@
+# ====================================
+# ML MODELS (auto-downloaded, do not commit)
+# Keep in: backend/models/
+# ====================================
+*.pt
+*.onnx
+*.pb
+*.weights
+*.tflite
+backend/models/*.pt
+backend/models/*.onnx
+
+# ====================================
+# SENSITIVE & SECURITY FILES
+# ====================================
+# Environment variables and API keys
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.env
+.env.local
+.env.production
+.env.development
+.env.development.local
+.env.test.local
+.env.production.local
+
+# API keys and secrets
+**/api_keys.txt
+**/secrets.json
+**/*_secret*
+**/*_key*
+*.pem
+*.key
+*.cert
+
+# ====================================
+# PYTHON
+# ====================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+.virtualenv
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ====================================
+# NODE.JS / REACT
+# ====================================
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Production build (any level)
+dist/
+build/
+.next/
+out/
+
+# Package manager lock files (optional - uncomment if you want to ignore them)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Testing
+coverage/
+
+# Misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ====================================
+# DATABASES
+# ====================================
+# SQLite databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Database data directories
+/data
+/db_data
+*.sql
+
+# ChromaDB (vector database)
+chroma_db/
+*.chroma
+
+# ====================================
+# LOGS & TEMPORARY FILES
+# ====================================
+# Log files
+*.log
+logs/
+*.log.*
+auth_debug.log
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Media and uploads (if user-generated)
+media/
+uploads/
+/backend/media/
+/frontend/public/uploads/
+
+# ====================================
+# IDE & EDITOR
+# ====================================
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# ====================================
+# OPERATING SYSTEM
+# ====================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+
+# ====================================
+# PROJECT SPECIFIC
+# ====================================
+# Docker
+*.dockerignore
+docker-compose.override.yml
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Configuration overrides
+config.local.js
+config.local.json
+
+# Documentation builds
+docs/_build/
+
+# ====================================
+# BACKEND SPECIFIC
+# ====================================
+# Python virtual environment
+backend/venv/
+backend/.venv/
+
+# ChromaDB vector store
+backend/chroma_db/
+
+# Media / uploaded files
+backend/media/
+
+# ====================================
+# FRONTEND SPECIFIC
+# ====================================
+# Local env files with real secrets
+frontend/.env.local
+frontend/.env.production
+frontend/.env.development
+
+# Built output
+frontend/dist/
+frontend/build/
+
+# logo / base64 text files
+logo_base64.txt

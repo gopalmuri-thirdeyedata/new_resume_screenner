@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    html {
+        scroll-behavior: smooth;
+    }
+
+    body {
+        /* Full Dark Text (Pure Black) and no-blur rendering */
+        @apply bg-white text-black font-sans overflow-x-hidden;
+        color: #000000;
+        -webkit-font-smoothing: auto;
+        -moz-osx-font-smoothing: auto;
+    }
+}
+
+@layer components {
+
+    /* Solid Brand Green Button (Used in Navbar 'Talk To Us') */
+    .btn-brand-green {
+        @apply px-6 py-2 bg-[#16A34A] text-white text-sm font-normal rounded-none transition-all hover:bg-green-700 active:scale-95;
+    }
+
+    /* Outline Brand Green Button (Used in Navbar 'Explore') */
+    .btn-brand-outline {
+        @apply px-6 py-2 border border-[#16A34A] text-[#16A34A] bg-white text-sm font-normal rounded-none transition-all hover:bg-green-50 active:scale-95;
+    }
+
+    /* Solid Action Blue Button (Used in Hero and Cards) */
+    .btn-action-blue {
+        @apply px-8 py-3 bg-[#00AEEF] text-white text-base font-normal rounded-none transition-all hover:brightness-110 active:scale-95 shadow-sm;
+    }
+
+    /* Grid Overlay Pattern (Light Green as seen in new images) */
+    .grid-pattern-green {
+        @apply pointer-events-none;
+        background-size: 40px 40px;
+        background-image:
+            linear-gradient(to right, rgba(22, 163, 74, 0.1) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(22, 163, 74, 0.1) 1px, transparent 1px);
+    }
+
+    /* Grid Overlay Pattern (Blue cage as requested) */
+    .grid-pattern-blue {
+        @apply pointer-events-none;
+        background-size: 40px 40px;
+        background-image:
+            linear-gradient(to right, rgba(0, 174, 239, 0.2) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(0, 174, 239, 0.2) 1px, transparent 1px);
+    }
+
+    .glass-card {
+        @apply bg-white border border-gray-100 rounded-none shadow-sm hover:shadow-lg transition-all;
+    }
+
+    .input-field {
+        @apply w-full px-4 py-3 bg-white border border-gray-200 rounded-none focus:outline-none focus:ring-1 focus:ring-[#00AEEF] focus:border-[#00AEEF] text-black placeholder-gray-400 transition-all;
+    }
+}
+
+@layer utilities {
+    .text-pure-black {
+        color: #000000 !important;
+    }
+
+    /* Force commonly-used gray utility classes to full dark text for better contrast */
+    .text-gray-400,
+    .text-gray-500,
+    .text-gray-600,
+    .text-gray-700,
+    .text-gray-800 {
+        color: #111827 !important; /* Tailwind gray-900 */
+    }
+
+
+    /* Hide scrollbar */
+    .no-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+
+    .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+
+    /* Custom components logic */
+    @keyframes marquee {
+        0% {
+            transform: translateX(0);
+        }
+
+        100% {
+            transform: translateX(-50%);
+        }
+    }
+
+    .animate-marquee {
+        animation: marquee 30s linear infinite;
+    }
+}
