@@ -73,6 +73,7 @@ from datetime import datetime, timedelta
 
 @router.get("/admin/stats/")
 def get_admin_stats(
+    user_id: int = None,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -81,8 +82,12 @@ def get_admin_stats(
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Access denied. Admin role required.")
 
-    # 1. Query all candidates and activity logs
-    candidates = db.query(models.Candidate).all()
+    # 1. Query candidates (filtered by user_id if provided) and activity logs
+    candidates_query = db.query(models.Candidate)
+    if user_id is not None:
+        candidates_query = candidates_query.filter(models.Candidate.created_by == user_id)
+    candidates = candidates_query.all()
+
     logs = db.query(models.ActivityLog).order_by(models.ActivityLog.timestamp.desc()).limit(10).all()
 
     # 2. Basic Candidate Statistics
@@ -177,7 +182,8 @@ def get_admin_stats(
                 "role": c.role,
                 "score": c.score if c.score is not None else 0,
                 "experience": c.analysis_data.get("experience", "N/A") if c.analysis_data and isinstance(c.analysis_data, dict) else "N/A",
-                "certifications": c.analysis_data.get("certification_match", []) if c.analysis_data and isinstance(c.analysis_data, dict) else []
+                "certifications": c.analysis_data.get("certification_match", []) if c.analysis_data and isinstance(c.analysis_data, dict) else [],
+                "candidate_summary": c.analysis_data.get("candidate_summary", c.analysis_data.get("reasoning", "N/A")) if c.analysis_data and isinstance(c.analysis_data, dict) else "N/A"
             }
             for c in candidates
         ],
@@ -196,6 +202,16 @@ def get_admin_stats(
             "timestamp": log.timestamp.isoformat() if log.timestamp else None
         })
 
+    # Fetch distinct creator ids
+    creator_ids = db.query(models.Candidate.created_by).distinct().all()
+    creator_ids = [r[0] for r in creator_ids if r[0] is not None]
+
+    # Query ONLY users who have actually created/screened candidates
+    hr_users = []
+    if creator_ids:
+        hr_users = db.query(models.User).filter(models.User.id.in_(creator_ids)).all()
+    users_list = [{"id": u.id, "email": u.email} for u in hr_users]
+
     return {
         "candidate_stats": {
             "total_resumes": total_resumes,
@@ -212,5 +228,6 @@ def get_admin_stats(
         "most_used_keywords": most_used_keywords,
         "most_matched_certifications": most_matched_certs,
         "top_candidates": top_candidates,
-        "recent_activity": recent_activity
+        "recent_activity": recent_activity,
+        "users": users_list
     }

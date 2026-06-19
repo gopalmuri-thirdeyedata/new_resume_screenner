@@ -53,7 +53,7 @@ const DashboardLayout = () => {
     const isAdmin = role === 'admin' || role === 'SUPER_ADMIN' || role === 'HR_ADMIN';
     const location = useLocation();
     const isPortalPage = location.pathname === '/dashboard';
-    const showNavbar = isAdmin || !isPortalPage;
+    const showNavbar = true;
 
     return (
         <div className="h-screen bg-white flex flex-col overflow-hidden font-sans antialiased text-black selection:bg-green-100 selection:text-green-900">

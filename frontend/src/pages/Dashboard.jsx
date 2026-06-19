@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     TrendingUp, Users, FileText, CheckCircle, BrainCircuit, Activity, 
     Clock, Award, Sparkles, AlertCircle, RefreshCw, ChevronRight, Briefcase, Lock,
-    Download, FileSpreadsheet, Trash2
+    Download, FileSpreadsheet, Trash2, ChevronDown
 } from 'lucide-react';
 import { 
     ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, 
@@ -25,6 +25,9 @@ const Dashboard = () => {
     const [showExportDropdown, setShowExportDropdown] = useState(false);
     const [resetting, setResetting] = useState(false);
     const [showResetConfirm, setShowResetConfirm] = useState(false);
+    const [selectedUserId, setSelectedUserId] = useState(null);
+    const [selectedUserEmail, setSelectedUserEmail] = useState('All Users');
+    const [showUserDropdown, setShowUserDropdown] = useState(false);
 
     const handleResetData = async () => {
         setResetting(true);
@@ -39,7 +42,9 @@ const Dashboard = () => {
             });
             if (response.ok) {
                 alert("Dashboard candidate records and vectors have been successfully reset.");
-                fetchStats();
+                setSelectedUserId(null);
+                setSelectedUserEmail('All Users');
+                fetchStats(false, null);
             } else {
                 const errData = await response.json();
                 alert(`Reset failed: ${errData.detail || 'Unknown error'}`);
@@ -287,7 +292,7 @@ const Dashboard = () => {
         setShowExportDropdown(false);
     };
 
-    const fetchStats = async (isBackground = false) => {
+    const fetchStats = async (isBackground = false, userId = selectedUserId) => {
         if (!isBackground) {
             setLoading(true);
         } else {
@@ -296,7 +301,11 @@ const Dashboard = () => {
         setError(null);
         try {
             const token = localStorage.getItem('token');
-            const response = await fetch(`${API_URL}/api/dashboard/admin/stats/`, {
+            let url = `${API_URL}/api/dashboard/admin/stats/`;
+            if (userId !== null) {
+                url += `?user_id=${userId}`;
+            }
+            const response = await fetch(url, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (response.ok) {
@@ -317,20 +326,25 @@ const Dashboard = () => {
 
     useEffect(() => {
         if (isAdmin) {
-            fetchStats();
-            const interval = setInterval(() => fetchStats(true), 15000);
+            fetchStats(false, selectedUserId);
+        }
+    }, [isAdmin, selectedUserId]);
+
+    useEffect(() => {
+        if (isAdmin) {
+            const interval = setInterval(() => fetchStats(true, selectedUserId), 15000);
             return () => clearInterval(interval);
         }
-    }, [isAdmin]);
+    }, [isAdmin, selectedUserId]);
 
     if (!isAdmin) {
         return (
             <div className="space-y-8 w-full max-w-7xl mx-auto py-10 px-6 font-sans">
-                {/* Header matching Optira workflows style */}
+                {/* Header matching HiringAI workflows style */}
                 <div className="space-y-2 mb-10 text-left">
-                    <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Workflows</h1>
+                    <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Hiring Workflows</h1>
                     <p className="text-sm text-gray-500 font-medium">
-                        Select a document workflow to process, query, and configure.
+                        Select a recruitment stage to manage candidates, trigger assessments, and configure screening criteria.
                     </p>
                 </div>
 
@@ -461,17 +475,17 @@ const Dashboard = () => {
                 </div>
 
                 {/* Contact Us Box */}
-                <div className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-8 relative overflow-hidden mt-8 shadow-xl animate-in slide-in-from-bottom">
+                <div className="bg-white border border-gray-200/80 text-gray-900 rounded-3xl p-8 relative overflow-hidden mt-8 shadow-md hover:shadow-lg transition-all duration-300 animate-in slide-in-from-bottom">
                     <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-[#5d8c2c]/10 rounded-full blur-3xl" />
                     <div className="absolute -left-10 -top-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl" />
                     
                     <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative z-10">
                         <div className="space-y-3">
-                            <h3 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                            <h3 className="text-xl font-bold tracking-tight text-gray-900 flex items-center gap-2">
                                 Contact Us
                                 <Sparkles size={18} className="text-amber-400 animate-pulse" />
                             </h3>
-                            <p className="text-xs text-slate-300 leading-relaxed max-w-xl">
+                            <p className="text-xs text-slate-600 leading-relaxed max-w-xl">
                                 Ready to unlock premium MCQs, isolated coding compile rounds, and real-time voice assessments? Contact ThirdEye Data today to upgrade your pipeline.
                             </p>
                         </div>
@@ -543,25 +557,64 @@ const Dashboard = () => {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
                 <div>
                     <h1 className="text-3xl font-black text-[#5d8c2c] tracking-tight flex items-center gap-2">
-                        Admin Command Center
+                        Command Center
                         <Sparkles size={24} className="text-amber-500 animate-pulse" />
                     </h1>
                     <p className="text-gray-500 text-sm mt-1 font-medium">Real-time candidate statistics, AI screening match trends, and pipeline health.</p>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-4">
+                    {/* Premium User Filter Dropdown Button */}
+                    <div className="relative">
+                        <button 
+                            onClick={() => setShowUserDropdown(!showUserDropdown)}
+                            className="flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-gray-700 hover:text-gray-900 bg-white border border-gray-200 hover:bg-gray-50 rounded-xl transition-all shadow-sm"
+                            title="Filter by Screener"
+                        >
+                            <Users size={14} className="text-gray-400" />
+                            <span>
+                                Screened By: <span className="text-[#5d8c2c] ml-0.5">{selectedUserEmail}</span>
+                            </span>
+                            <ChevronDown size={13} className="text-gray-400 ml-1 shrink-0" />
+                        </button>
+                        {showUserDropdown && (
+                            <>
+                                <div className="fixed inset-0 z-[45]" onClick={() => setShowUserDropdown(false)} />
+                                <div className="absolute left-0 mt-2 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-50 py-1.5 overflow-hidden animate-in fade-in slide-in-from-top-2 max-h-60 overflow-y-auto">
+                                    <button
+                                        onClick={() => {
+                                            setSelectedUserId(null);
+                                            setSelectedUserEmail('All Users');
+                                            setShowUserDropdown(false);
+                                        }}
+                                        className={`w-full text-left px-4 py-2.5 text-xs font-bold transition-colors ${selectedUserId === null ? 'bg-green-50 text-green-700 border-l-2 border-green-500' : 'text-gray-700 hover:bg-gray-50'}`}
+                                    >
+                                        All Users
+                                    </button>
+                                    {(data?.users || []).map((u) => (
+                                        <button
+                                            key={u.id}
+                                            onClick={() => {
+                                                setSelectedUserId(u.id);
+                                                setSelectedUserEmail(u.email);
+                                                setShowUserDropdown(false);
+                                            }}
+                                            className={`w-full text-left px-4 py-2.5 text-xs font-bold transition-colors truncate ${selectedUserId === u.id ? 'bg-green-50 text-green-700 border-l-2 border-green-500' : 'text-gray-700 hover:bg-gray-50'}`}
+                                            title={u.email}
+                                        >
+                                            {u.email}
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
+                    </div>
+
                     {refreshing && (
                         <div className="flex items-center gap-1.5 text-xs text-gray-400">
                             <RefreshCw size={12} className="animate-spin" />
                             Updating...
                         </div>
                     )}
-                    <button 
-                        onClick={() => fetchStats(true)}
-                        className="p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-xl transition-colors border border-gray-200"
-                        title="Refresh Stats"
-                    >
-                        <RefreshCw size={16} />
-                    </button>
                     
                     <div className="relative">
                         <button 
@@ -604,14 +657,6 @@ const Dashboard = () => {
                         <Trash2 size={14} className="text-red-500" />
                         <span>{resetting ? 'Resetting...' : 'Reset Data'}</span>
                     </button>
-
-                    <span className="flex h-3 w-3 relative">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                    </span>
-                    <span className="text-xs font-bold text-green-700 bg-green-50 border border-green-200 px-3 py-1 rounded-full uppercase tracking-wider">
-                        Live Sync Active
-                    </span>
                 </div>
             </div>
 
@@ -724,7 +769,7 @@ const Dashboard = () => {
             </div>
 
             {/* Charts Section Row 2 */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* 1. Experience Distribution */}
                 <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
                     <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
@@ -745,27 +790,7 @@ const Dashboard = () => {
                     </div>
                 </div>
 
-                {/* 2. Keyword Match Distribution */}
-                <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-                    <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                        <TrendingUp size={16} className="text-indigo-600" />
-                        Keyword Match Distribution
-                    </h3>
-                    <p className="text-xs text-gray-400 mt-0.5">Buckets representing matching percentages</p>
-                    <div className="h-56 w-full mt-4">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={data?.keyword_match_distribution || []} margin={{ top: 10, right: 10, left: -30, bottom: 0 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                <XAxis dataKey="range" stroke="#94a3b8" fontSize={9} tickLine={false} />
-                                <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
-                                <Tooltip contentStyle={{ background: '#0f172a', color: '#fff', borderRadius: '12px', border: 'none', fontSize: '11px' }} />
-                                <Bar dataKey="count" fill="#5d8c2c" radius={[6, 6, 0, 0]} maxBarSize={30} />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </div>
-                </div>
-
-                {/* 3. Top Certifications Match (Horizontal Bar Chart) */}
+                {/* 2. Top Certifications Match (Horizontal Bar Chart) */}
                 <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
                     <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
                         <Award size={16} className="text-amber-500" />
@@ -795,34 +820,6 @@ const Dashboard = () => {
                 
                 {/* Column Left: Insights lists */}
                 <div className="space-y-6">
-                    {/* Top Keywords Card */}
-                    <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-                        <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
-                            <TrendingUp size={18} className="text-[#5d8c2c]" />
-                            Top Keyword Demands
-                        </h3>
-                        <div className="space-y-4">
-                            {(!data?.most_used_keywords || data.most_used_keywords.length === 0) ? (
-                                <p className="text-xs text-gray-400 italic">No keyword metrics collected yet.</p>
-                            ) : (
-                                data.most_used_keywords.map((kw, i) => (
-                                    <div key={i} className="space-y-1">
-                                        <div className="flex justify-between text-xs font-bold text-gray-700">
-                                            <span>{kw.keyword}</span>
-                                            <span>{kw.count} candidates</span>
-                                        </div>
-                                        <div className="w-full bg-gray-100 rounded-full h-1.5">
-                                            <div 
-                                                className="bg-[#5d8c2c] h-1.5 rounded-full" 
-                                                style={{ width: `${Math.min(100, (kw.count / (stats.total_screened || 1)) * 100)}%` }}
-                                            />
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
-
                     {/* Top Certifications Card */}
                     <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
                         <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
@@ -932,35 +929,6 @@ const Dashboard = () => {
                                     )}
                                 </tbody>
                             </table>
-                        </div>
-                    </div>
-
-                    {/* Recent Logs & Timeline */}
-                    <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-                        <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
-                            <Clock size={18} className="text-indigo-600" />
-                            System Activity Logs
-                        </h3>
-                        <div className="relative border-l border-gray-200 pl-4 space-y-5">
-                            {(!data?.recent_activity || data.recent_activity.length === 0) ? (
-                                <p className="text-xs text-gray-400 italic pl-1">No recent activity logged.</p>
-                            ) : (
-                                data.recent_activity.slice(0, 5).map((log, i) => (
-                                    <div key={i} className="relative space-y-1">
-                                        {/* Timeline Dot */}
-                                        <div className="absolute -left-[21px] mt-1.5 w-2.5 h-2.5 rounded-full bg-indigo-600 border-2 border-white ring-4 ring-indigo-50" />
-                                        <div className="text-xs font-bold text-gray-900 flex justify-between">
-                                            <span>{log.action}</span>
-                                            <span className="text-[10px] text-gray-400 font-normal">
-                                                {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : ''}
-                                            </span>
-                                        </div>
-                                        <p className="text-xs text-gray-500 leading-relaxed font-medium">
-                                            <span className="font-semibold text-gray-700">{log.target}</span> • {log.details}
-                                        </p>
-                                    </div>
-                                ))
-                            )}
                         </div>
                     </div>
                 </div>

@@ -15,6 +15,16 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import API_URL from '../apiConfig';
 
+const stripMarkdown = (text) => {
+    if (!text) return '';
+    return String(text)
+        .replace(/#+\s+/g, '') // remove headings (# Heading)
+        .replace(/[*`~_]/g, '') // remove *, `, ~, _
+        .replace(/^[ \t]*[-*+]\s+/gm, '• ') // replace list bullets with standard dot bullet
+        .replace(/\n\s*\n/g, '\n') // remove empty lines
+        .trim();
+};
+
 const STAGE_FLOW = {
     'Resume Screening': ['Aptitude Round', 'Coding Round', 'Technical Interview'],
     'Screened Candidates': ['Aptitude Round', 'Coding Round', 'Technical Interview'],
@@ -201,6 +211,10 @@ const CandidateTable = ({
             const rec = getRecommendation(c);
             const status = getAssessmentStatus(c, currentStage);
             const scoreData = getDisplayScore(c);
+            
+            const rawSummary = c.analysis_data?.candidate_summary || c.analysis_data?.reasoning || '—';
+            const summaryClean = rawSummary !== '—' ? stripMarkdown(rawSummary) : '—';
+            
             return {
                 "S.No": index + 1,
                 "Name": c.name,
@@ -209,7 +223,8 @@ const CandidateTable = ({
                 "Current Stage": c.stage,
                 "Status": status,
                 "AI Recommendation": rec.label,
-                "Accuracy Score": scoreData.primary + (scoreData.secondary ? ` ${scoreData.secondary}` : '')
+                "Accuracy Score": scoreData.primary + (scoreData.secondary ? ` ${scoreData.secondary}` : ''),
+                "Summary": summaryClean
             };
         });
     };
@@ -232,7 +247,12 @@ const CandidateTable = ({
                 maxLen[key] = Math.max(maxLen[key] || 0, val.length, key.length);
             });
         });
-        worksheet["!cols"] = Object.keys(maxLen).map(key => ({ wch: maxLen[key] + 3 }));
+        worksheet["!cols"] = Object.keys(maxLen).map(key => {
+            if (key === "Summary") {
+                return { wch: 50 };
+            }
+            return { wch: Math.min(Math.max(maxLen[key] + 3, 10), 60) };
+        });
 
         XLSX.writeFile(workbook, `Candidates_Export_${type}_${new Date().toISOString().slice(0, 10)}.xlsx`);
         setShowExportDropdown(false);
@@ -245,7 +265,11 @@ const CandidateTable = ({
             return;
         }
 
-        const doc = new jsPDF();
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'a4'
+        });
         
         // Add Title Header
         doc.setFontSize(18);
@@ -258,7 +282,7 @@ const CandidateTable = ({
         doc.text(`Total Candidates: ${data.length}`, 14, 31);
         
         // Table Columns & Rows
-        const headers = [["S.No", "Name", "Email", "Role", "Stage", "Status", "AI Rec", "Score"]];
+        const headers = [["S.No", "Name", "Email", "Role", "Stage", "Status", "AI Rec", "Score", "Summary"]];
         const body = data.map(row => [
             row["S.No"],
             row["Name"],
@@ -267,7 +291,8 @@ const CandidateTable = ({
             row["Current Stage"],
             row["Status"],
             row["AI Recommendation"],
-            row["Accuracy Score"]
+            row["Accuracy Score"],
+            row["Summary"]
         ]);
 
         autoTable(doc, {
@@ -276,9 +301,10 @@ const CandidateTable = ({
             body: body,
             theme: 'striped',
             headStyles: { fillColor: [93, 140, 44] }, // #5d8c2c
-            styles: { fontSize: 8, cellPadding: 2 },
+            styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
             columnStyles: {
-                2: { cellWidth: 40 }
+                2: { cellWidth: 35 }, // Email
+                8: { cellWidth: 60 }  // Summary
             }
         });
 
@@ -303,6 +329,7 @@ const CandidateTable = ({
                 <td>${row["Status"]}</td>
                 <td>${row["AI Recommendation"]}</td>
                 <td>${row["Accuracy Score"]}</td>
+                <td>${row["Summary"]}</td>
             </tr>
         `).join('');
 
@@ -338,6 +365,7 @@ const CandidateTable = ({
                         <th>Status</th>
                         <th>AI Recommendation</th>
                         <th>Accuracy Score</th>
+                        <th>Summary</th>
                     </tr>
                 </thead>
                 <tbody>

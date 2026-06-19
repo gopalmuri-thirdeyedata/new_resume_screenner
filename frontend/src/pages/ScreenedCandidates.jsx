@@ -3,6 +3,7 @@ import API_URL from '../apiConfig';
 import { BarChart2, Download, FileText, FileSpreadsheet, Loader2, Eye, X, Search, Trash2, AlertTriangle, CheckCircle } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 
 // ─── Utility: Clean phone numbers ────────────────────────────────────────────
 const cleanPhone = (phone) => {
@@ -108,7 +109,7 @@ const exportToPDF = (candidates, selectedColumns) => {
             else if (col.key === 'keyword_match_pct') val = c.analysis_data?.keyword_match_pct != null ? `${Number(c.analysis_data.keyword_match_pct).toFixed(2)}%` : '—';
             else if (col.key === 'key_skills_match') val = Array.isArray(c.analysis_data?.key_skills_match) ? c.analysis_data.key_skills_match.join(', ') : (c.analysis_data?.key_skills_match || '—');
             else if (col.key === 'candidate_summary') {
-                const rawSummary = c.analysis_data?.reasoning || c.analysis_data?.candidate_summary || '—';
+                const rawSummary = c.analysis_data?.candidate_summary || c.analysis_data?.reasoning || '—';
                 val = rawSummary !== '—' ? stripMarkdown(rawSummary) : '—';
             }
             else if (col.key === 'certification_match') val = Array.isArray(c.analysis_data?.certification_match) ? c.analysis_data.certification_match.join(', ') : (c.analysis_data?.certification_match || '—');
@@ -130,8 +131,9 @@ const exportToPDF = (candidates, selectedColumns) => {
 
 const exportToExcel = (candidates, selectedColumns) => {
     const headers = ['Rank', ...selectedColumns.map(col => col.label)];
-    const rows = candidates.map((c, i) => {
-        const colVals = selectedColumns.map(col => {
+    const data = candidates.map((c, i) => {
+        const row = { 'Rank': i + 1 };
+        selectedColumns.forEach(col => {
             let val = '—';
             if (col.key === 'name') val = c.name || '—';
             else if (col.key === 'phone') val = cleanPhone(c.phone) || '—';
@@ -144,26 +146,39 @@ const exportToExcel = (candidates, selectedColumns) => {
             else if (col.key === 'keyword_match_pct') val = c.analysis_data?.keyword_match_pct != null ? `${Number(c.analysis_data.keyword_match_pct).toFixed(2)}%` : '—';
             else if (col.key === 'key_skills_match') val = Array.isArray(c.analysis_data?.key_skills_match) ? c.analysis_data.key_skills_match.join(', ') : (c.analysis_data?.key_skills_match || '—');
             else if (col.key === 'candidate_summary') {
-                const rawSummary = c.analysis_data?.reasoning || c.analysis_data?.candidate_summary || '—';
-                const cleanSummary = rawSummary !== '—' ? stripMarkdown(rawSummary) : '—';
-                val = wrapText(cleanSummary, 60);
+                const rawSummary = c.analysis_data?.candidate_summary || c.analysis_data?.reasoning || '—';
+                val = rawSummary !== '—' ? stripMarkdown(rawSummary) : '—';
             }
             else if (col.key === 'certification_match') val = Array.isArray(c.analysis_data?.certification_match) ? c.analysis_data.certification_match.join(', ') : (c.analysis_data?.certification_match || '—');
             
-            // Excel CSV Cell Escaping
-            return `"${String(val).replace(/"/g, '""')}"`;
+            row[col.label] = val;
         });
-        return [i + 1, ...colVals];
+        return row;
     });
 
-    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `screened_candidates_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Screened Candidates");
+    
+    // Auto-fit column widths
+    const maxLen = {};
+    headers.forEach(h => {
+        maxLen[h] = h.length;
+    });
+    data.forEach(row => {
+        Object.keys(row).forEach(key => {
+            const val = String(row[key] || '');
+            maxLen[key] = Math.max(maxLen[key] || 0, val.length);
+        });
+    });
+    worksheet["!cols"] = headers.map(h => {
+        if (h === 'Summary') {
+            return { wch: 50 };
+        }
+        return { wch: Math.min(Math.max(maxLen[h] + 3, 10), 60) };
+    });
+
+    XLSX.writeFile(workbook, `screened_candidates_${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
 
 const exportToWord = (candidates, selectedColumns) => {
@@ -182,7 +197,7 @@ const exportToWord = (candidates, selectedColumns) => {
             else if (col.key === 'keyword_match_pct') val = c.analysis_data?.keyword_match_pct != null ? `${Number(c.analysis_data.keyword_match_pct).toFixed(2)}%` : '—';
             else if (col.key === 'key_skills_match') val = Array.isArray(c.analysis_data?.key_skills_match) ? c.analysis_data.key_skills_match.join(', ') : (c.analysis_data?.key_skills_match || '—');
             else if (col.key === 'candidate_summary') {
-                const rawSummary = c.analysis_data?.reasoning || c.analysis_data?.candidate_summary || '—';
+                const rawSummary = c.analysis_data?.candidate_summary || c.analysis_data?.reasoning || '—';
                 val = rawSummary !== '—' ? stripMarkdown(rawSummary) : '—';
             }
             else if (col.key === 'certification_match') val = Array.isArray(c.analysis_data?.certification_match) ? c.analysis_data.certification_match.join(', ') : (c.analysis_data?.certification_match || '—');
@@ -274,7 +289,7 @@ const ExportConfigModal = ({ isOpen, onClose, onExport, candidates }) => {
                         <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Select Export Format</h4>
                         <div className="grid grid-cols-3 gap-3">
                             {[
-                                { id: 'excel', label: 'Excel (CSV)', desc: 'Spreadsheet format', icon: FileSpreadsheet, color: 'text-green-600 bg-green-50 border-green-200' },
+                                { id: 'excel', label: 'Excel (XLSX)', desc: 'Spreadsheet format', icon: FileSpreadsheet, color: 'text-green-600 bg-green-50 border-green-200' },
                                 { id: 'pdf', label: 'PDF Document', desc: 'Printable report', icon: FileText, color: 'text-red-600 bg-red-50 border-red-200' },
                                 { id: 'word', label: 'Word Document', desc: 'Editable document', icon: FileText, color: 'text-blue-600 bg-blue-50 border-blue-200' },
                             ].map((fmt) => {
@@ -834,29 +849,19 @@ const ScreenedCandidates = () => {
                                         <th className="px-4 py-4 text-left font-semibold text-gray-500 uppercase tracking-wide text-xs">Phone</th>
                                         <th className="px-4 py-4 text-left font-semibold text-gray-500 uppercase tracking-wide text-xs">Email</th>
                                         <th className="px-4 py-4 text-left font-semibold text-gray-500 uppercase tracking-wide text-xs w-24">Score</th>
-                                        {hasKeywordData && (
-                                            <th className="px-4 py-4 text-left font-semibold text-gray-500 uppercase tracking-wide text-xs w-28">Keyword Score</th>
-                                        )}
-                                        <th className="px-4 py-4 text-left font-semibold text-gray-500 uppercase tracking-wide text-xs min-w-[260px]">AI Summary</th>
+                                        <th className="px-4 py-4 text-left font-semibold text-gray-500 uppercase tracking-wide text-xs">AI Analysis</th>
                                         <th className="px-4 py-4 text-center font-semibold text-gray-500 uppercase tracking-wide text-xs w-32">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                     {filteredCandidates.length === 0 ? (
                                         <tr>
-                                            <td colSpan={hasKeywordData ? 8 : 7} className="px-4 py-10 text-center text-gray-400 text-sm">
+                                            <td colSpan={7} className="px-4 py-10 text-center text-gray-400 text-sm">
                                                 No candidates match your search.
                                             </td>
                                         </tr>
                                     ) : filteredCandidates.map((c, idx) => {
                                         const badge = getScoreBadge(c.score);
-                                        const rawSummary = c.analysis_data?.reasoning || c.analysis_data?.candidate_summary || '';
-                                        const plainSummary = stripMarkdown(rawSummary);
-                                        const summaryPreview = plainSummary.length > 160
-                                            ? plainSummary.slice(0, 160) + '…'
-                                            : plainSummary || '—';
-                                        const keywordPct = c.analysis_data?.keyword_match_pct;
-                                        const keywordMatched = c.analysis_data?.key_skills_match;
                                         return (
                                             <tr key={c.id} className="hover:bg-gray-50/70 transition-colors">
                                                 <td className="px-4 py-4">
@@ -881,36 +886,10 @@ const ScreenedCandidates = () => {
                                                         {badge.label}
                                                     </span>
                                                 </td>
-                                                {hasKeywordData && (
-                                                    <td className="px-4 py-4">
-                                                        {keywordPct != null ? (
-                                                            <div>
-                                                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
-                                                                    keywordPct >= 75 ? 'bg-green-50 text-green-700' :
-                                                                    keywordPct >= 40 ? 'bg-yellow-50 text-yellow-700' :
-                                                                    'bg-red-50 text-red-600'
-                                                                }`}>
-                                                                    {Number(keywordPct).toFixed(0)}%
-                                                                </span>
-                                                                {Array.isArray(keywordMatched) && keywordMatched.length > 0 && (
-                                                                    <div className="flex flex-wrap gap-1 mt-1.5">
-                                                                        {keywordMatched.slice(0, 3).map((kw, i) => (
-                                                                            <span key={i} className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-700 rounded border border-green-100">{kw}</span>
-                                                                        ))}
-                                                                        {keywordMatched.length > 3 && <span className="text-[10px] text-gray-400">+{keywordMatched.length - 3}</span>}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        ) : (
-                                                            <span className="text-gray-300 text-xs">—</span>
-                                                        )}
-                                                    </td>
-                                                )}
-                                                <td className="px-4 py-4 max-w-xs">
-                                                    <p className="text-xs text-gray-600 leading-relaxed mb-2">{summaryPreview}</p>
+                                                <td className="px-4 py-4">
                                                     <button
                                                         onClick={() => setAnalysisCandidate(c)}
-                                                        className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg font-semibold hover:bg-indigo-100 transition-all border border-indigo-200"
+                                                        className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg font-semibold hover:bg-indigo-100 transition-all border border-indigo-200"
                                                         title="View full AI analysis"
                                                     >
                                                         <Search size={11} />
