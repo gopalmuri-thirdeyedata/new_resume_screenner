@@ -199,6 +199,7 @@ OUTPUT JSON ONLY:
           • Extracts candidate contact info (name, email, phone)
           • Scores the resume against the JD using the weighted rubric
           • Returns extracted_role, skills, reasoning
+          • Evaluates [CUSTOM REQUIREMENTS] and returns keyword tags for matches
         """
         sw = weights
         prompt = f"""
@@ -229,7 +230,8 @@ You are an advanced Automated Applicant Tracking System (ATS) and Senior Technic
    - *Total Score constraint: The sum of the component scores MUST exactly equal the overall score after any deductions (max 100).*
 4. **Experience Extraction**: Extract the candidate's total years of experience as a short string (e.g. "2 Years", "5 Years", "8+ Years", "None").
 5. **Certification Match**: If "Additional Requirements / Certifications" are specified in the Job Description, evaluate if the candidate has met these certifications/requirements. Extract a list of matched certifications/requirements. If none are matched or specified, return an empty list.
-6. **Candidate Summary**: Generate a short, professional, and concise summary of the candidate's profile and matching status (2-3 lines maximum, suitable for reports).
+6. **Custom Requirements Match**: If "[CUSTOM REQUIREMENTS]:" is specified in the Job Description, carefully read each requirement listed there. For EACH requirement that the candidate DOES meet based on their resume, generate a SHORT descriptive keyword tag (2-5 words max, e.g. "AWS Certified", "Bilingual English/Spanish", "6+ Years Leadership"). Return these as a list of matched keyword strings. If none match or none are specified, return an empty list.
+7. **Candidate Summary**: Generate a short, professional, and concise summary of the candidate's profile and matching status (2-3 lines maximum, suitable for reports).
 
 ### Output Format:
 Return a valid JSON object matching this schema. Do not output any preamble, markdown code blocks, or postamble.
@@ -250,6 +252,7 @@ Return a valid JSON object matching this schema. Do not output any preamble, mar
     "reasoning": "Professional explanation details: 1) why the candidate received the matching scores, 2) core strengths, 3) notable gaps relative to requirements, and 4) detail any deductions applied (e.g. for missing/placeholder contact details).",
     "experience": "Candidate's total experience, e.g. 5 Years or 8+ Years",
     "certification_match": ["AWS Certified", "PMP Certified"],
+    "custom_prompt_matches": ["AWS Certified", "Bilingual English/Spanish"],
     "candidate_summary": "Short 2-3 line summary suitable for reports"
 }}
 """
@@ -538,21 +541,36 @@ async def _embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list:
 
 
 
+def _chunk_text_overlap(text: str, chunk_size: int = 800, overlap: int = 150) -> list:
+    """Split text into overlapping chunks of chunk_size with overlap."""
+    if len(text) <= chunk_size:
+        return [text]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        if len(chunk) > 50:
+            chunks.append(chunk)
+        start += chunk_size - overlap
+    return chunks
+
+
 def _chunk_resume(full_text: str, candidate_id: int) -> list:
-    """Split resume plain text into semantic section chunks for vector indexing."""
+    """Split resume plain text into semantic section chunks and overlapping sliding windows for indexing."""
     chunks = []
     text = full_text.strip()
     if not text:
         return chunks
 
-    # Full text anchor (capped at 3000 chars)
+    # 1. Full text anchor (capped at 3000 chars)
     chunks.append({"field": "full", "text": text[:3000]})
 
-    # Header chunk (first 600 chars: name, contact, summary)
+    # 2. Header chunk (first 600 chars: name, contact, summary)
     if len(text) > 100:
         chunks.append({"field": "header", "text": text[:600]})
 
-    # Section-based chunking via common headings
+    # 3. Section-based chunking via common headings
     section_patterns = {
         "skills": r"(?i)^(skills?|technical skills?|core competencies|technologies|tech stack|key skills)[\s:]*$",
         "experience": r"(?i)^(experience|work experience|employment|work history|professional experience|career history)[\s:]*$",
@@ -563,6 +581,7 @@ def _chunk_resume(full_text: str, candidate_id: int) -> list:
     lines = text.split('\n')
     current_section = None
     section_lines: list = []
+    sections = {}
 
     for line in lines:
         stripped = line.strip()
@@ -576,33 +595,35 @@ def _chunk_resume(full_text: str, candidate_id: int) -> list:
                 break
 
         if matched_section:
-            if current_section and len(section_lines) > 2:
-                section_text = '\n'.join(section_lines[:60])
-                if len(section_text) > 60:
-                    chunks.append({"field": current_section, "text": section_text})
+            if current_section and len(section_lines) > 0:
+                sections[current_section] = '\n'.join(section_lines)
             current_section = matched_section
             section_lines = []
         elif current_section:
             section_lines.append(stripped)
 
     # Flush last section
-    if current_section and len(section_lines) > 2:
-        section_text = '\n'.join(section_lines[:60])
-        if len(section_text) > 60:
-            chunks.append({"field": current_section, "text": section_text})
+    if current_section and len(section_lines) > 0:
+        sections[current_section] = '\n'.join(section_lines)
 
-    # Deduplicate by field (keep first occurrence)
-    seen: set = set()
-    unique: list = []
-    for chunk in chunks:
-        if chunk["field"] not in seen:
-            seen.add(chunk["field"])
-            unique.append(chunk)
-    return unique
+    # Process sections into sub-chunks with overlap
+    for sec_name, sec_text in sections.items():
+        sub_chunks = _chunk_text_overlap(sec_text, chunk_size=800, overlap=150)
+        for idx, sub_text in enumerate(sub_chunks):
+            chunks.append({"field": f"{sec_name}_{idx}", "text": sub_text})
+
+    # 4. General character-based sliding-window chunks fallback over entire document
+    all_sliding = _chunk_text_overlap(text, chunk_size=1000, overlap=200)
+    for idx, sub_text in enumerate(all_sliding):
+        chunks.append({"field": f"sliding_{idx}", "text": sub_text})
+
+    return chunks
 
 
-def _make_point_id(candidate_id: int, field: str) -> str:
-    return str(_uuid.uuid5(_uuid.NAMESPACE_DNS, f"{candidate_id}:{field}"))
+def _make_point_id(candidate_id: int, field: str, text: str = "") -> str:
+    import hashlib
+    text_hash = hashlib.md5(text.encode('utf-8')).hexdigest() if text else ""
+    return str(_uuid.uuid5(_uuid.NAMESPACE_DNS, f"{candidate_id}:{field}:{text_hash}"))
 
 
 class RagIndexingService:
@@ -633,6 +654,28 @@ class RagIndexingService:
             print(f"[RAG] Failed to delete collection for user {user_id}: {e}", flush=True)
 
     @staticmethod
+    def delete_candidate_vectors(candidate_id: int, user_id: int) -> bool:
+        """Remove all Qdrant vectors for a single candidate without touching others."""
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            client = _get_qdrant()
+            collection_name = RagIndexingService._collection_name(user_id)
+            existing = [c.name for c in client.get_collections().collections]
+            if collection_name not in existing:
+                return True
+            client.delete(
+                collection_name=collection_name,
+                points_selector=Filter(
+                    must=[FieldCondition(key="candidate_id", match=MatchValue(value=candidate_id))]
+                )
+            )
+            print(f"[RAG] Deleted vectors for candidate {candidate_id} from {collection_name}", flush=True)
+            return True
+        except Exception as e:
+            print(f"[RAG] Failed to delete vectors for candidate {candidate_id}: {e}", flush=True)
+            return False
+
+    @staticmethod
     async def index_candidate(candidate_id: int, user_id: int, full_text: str) -> bool:
         """Chunk, embed, and upsert a candidate's resume into Qdrant."""
         try:
@@ -657,7 +700,7 @@ class RagIndexingService:
 
             points = [
                 PointStruct(
-                    id=_make_point_id(candidate_id, chunks[i]["field"]),
+                    id=_make_point_id(candidate_id, chunks[i]["field"], chunks[i]["text"]),
                     vector=embeddings[i],
                     payload={
                         "candidate_id": candidate_id,
@@ -707,23 +750,43 @@ class RagQueryService:
                 "source_candidate_ids": []
             }
 
-        # Embed query
+        # 1. Candidate Name Pre-filtering
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        matched_ids = []
+        lower_query = query_text.lower()
+        for cid, name in (candidate_names_map or {}).items():
+            name_lower = name.lower()
+            name_parts = name_lower.split()
+            # Match if full name or any distinct name part is in the query text
+            if name_lower in lower_query or any(len(part) > 2 and part in lower_query for part in name_parts):
+                matched_ids.append(cid)
+
+        qdrant_filter = None
+        if matched_ids:
+            if len(matched_ids) == 1:
+                qdrant_filter = Filter(
+                    must=[FieldCondition(key="candidate_id", match=MatchValue(value=matched_ids[0]))]
+                )
+            else:
+                qdrant_filter = Filter(
+                    should=[FieldCondition(key="candidate_id", match=MatchValue(value=cid)) for cid in matched_ids]
+                )
+            print(f"[RAG] Narrowing search to candidates: {matched_ids}", flush=True)
+
+        # 2. Vector Search (Single Query, 1 Embedding Call)
         query_vector = await _embed_text(query_text, "RETRIEVAL_QUERY")
 
-        # Vector search
         search_results = await asyncio.to_thread(
             client.search,
             collection_name=collection_name,
             query_vector=query_vector,
-            limit=8
+            query_filter=qdrant_filter,
+            limit=10
         )
 
         if not search_results:
-            return {
-                "answer": "No matching candidates found for your query. Try different keywords.",
-                "sources_count": 0,
-                "source_candidate_ids": []
-            }
+            # If candidate name filtering was active, we may have no vector match, but can still answer using DB directory
+            print(f"[RAG] No vector match for query: {query_text}", flush=True)
 
         # Build context from retrieved chunks — use names if provided
         context_parts = []
@@ -739,6 +802,31 @@ class RagQueryService:
             )
         context = "\n\n---\n\n".join(context_parts)
 
+        # 3. Structured Database Context Integration (Hybrid Search)
+        directory_context = ""
+        try:
+            from database import SessionLocal
+            import models
+            db = SessionLocal()
+            try:
+                # Retrieve all candidates owned by this user
+                db_candidates = db.query(models.Candidate).filter(
+                    models.Candidate.created_by == user_id
+                ).all()
+                if db_candidates:
+                    dir_lines = ["#### Candidate Directory (Structured Database Records):"]
+                    for c in db_candidates:
+                        exp = c.analysis_data.get("experience", "N/A") if c.analysis_data and isinstance(c.analysis_data, dict) else "N/A"
+                        dir_lines.append(
+                            f"- Name: {c.name} | Role: {c.role} | Score: {c.score or 0.0} | "
+                            f"Status: {c.status} | Stage: {c.stage} | Exp: {exp}"
+                        )
+                    directory_context = "\n".join(dir_lines)
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[RAG] Failed to build candidate directory context: {e}", flush=True)
+
         # Append last 6 conversation turns
         history_str = ""
         if conversation_history:
@@ -748,9 +836,17 @@ class RagQueryService:
 
         prompt = f"""
 ### System Instructions:
-You are an expert AI Recruiting Partner. Your task is to provide objective, precise, and fact-based answers to the HR manager's question based ONLY on the retrieved candidate resume contexts.
+You are an expert AI Recruiting Partner. Your task is to provide objective, precise, and fact-based answers to the HR manager's question.
 
-### Context:
+You have access to two context sources:
+1. **Candidate Directory**: A structured list of candidate records currently in the database (names, roles, overall scores, status, stage, years of experience). Use this directory to answer quantitative, ranking, comparative, or status-based questions (e.g. "Who has a score above 80?", "Which candidates are hired?").
+2. **Resume Contexts**: Semantic segments of the candidates' resume text retrieved from the vector index. Use these segments to answer detailed questions about projects, experience details, and specific skills.
+
+### Contexts:
+{directory_context}
+
+---
+
 #### Resume Contexts:
 {context}
 
@@ -761,7 +857,7 @@ You are an expert AI Recruiting Partner. Your task is to provide objective, prec
 HR Manager's Inquiry: {query_text}
 
 ### Constraints & Formatting Guidelines:
-1. **Source Fidelity**: Rely ONLY on the facts present in the provided Resume Contexts. Do not extrapolate, assume, or speculate.
+1. **Source Fidelity**: Rely ONLY on the facts present in the provided contexts. Do not extrapolate, assume, or speculate.
 2. **Identification**: Refer to candidates exclusively by their full name (never by ID numbers or index).
 3. **Format**: Use clean markdown structure:
    - Bold candidate names and key technical skills (e.g., **Python**, **React**).

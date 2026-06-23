@@ -188,6 +188,8 @@ async def screen_resume(
     job_description: Optional[str] = Form(None),
     keywords: Optional[str] = Form(None),
     certifications: Optional[str] = Form(None),
+    custom_prompt: Optional[str] = Form(None),
+    batch_name: Optional[str] = Form(None),
     top_n: Optional[int] = Form(10),
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
@@ -203,6 +205,8 @@ async def screen_resume(
         final_jd += f"\n\nRequired Keywords: {keywords}"
     if certifications and certifications.strip():
         final_jd += f"\n\nAdditional Requirements / Certifications: {certifications}"
+    if custom_prompt and custom_prompt.strip():
+        final_jd += f"\n\n[CUSTOM REQUIREMENTS]: {custom_prompt}"
 
     candidate_count = db.query(models.Candidate).count()
     MAX_CANDIDATES = 50
@@ -236,6 +240,7 @@ async def screen_resume(
             jd_text=final_jd,
             top_n=top_n,
             status="pending",
+            batch_name=batch_name or None,
             created_by=current_user.id
         )
         db.add(job)
@@ -309,6 +314,9 @@ def get_batch_status(
                     "email": candidate.email,
                     "role": candidate.role,
                     "score": candidate.score,
+                    "resume_file": candidate.resume_file,
+                    "phone": candidate.phone,
+                    "analysis_data": candidate.analysis_data,
                 }
         results.append(entry)
 
@@ -433,7 +441,7 @@ def delete_candidate(
     ).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
-        
+
     # Clear referencing candidate_id in screening_jobs first to prevent integrity violation
     db.query(models.ScreeningJob).filter(
         models.ScreeningJob.candidate_id == candidate_id
@@ -442,7 +450,11 @@ def delete_candidate(
 
     db.delete(candidate)
     db.commit()
-    
+
+    # Remove this candidate's vectors from Qdrant
+    from services.rag_service import RagIndexingService
+    RagIndexingService.delete_candidate_vectors(candidate_id, current_user.id)
+
     return None
 
 @router.post("/candidates/bulk-update/", response_model=Dict[str, Any])
@@ -795,4 +807,154 @@ def reset_screened_candidates(
         import traceback
         print(f"Error resetting screened candidates: {e}\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=500, detail=f"Failed to reset candidates: {str(e)}")
+
+
+@router.get("/batches/", response_model=List[Dict[str, Any]])
+def get_screening_batches(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get unique resume screening batches processed by the current user.
+    """
+    from sqlalchemy import func, case
+    try:
+        batch_data = db.query(
+            models.ScreeningJob.batch_id,
+            func.min(models.ScreeningJob.created_at).label("created_at"),
+            func.count(models.ScreeningJob.id).label("total"),
+            func.sum(case([(models.ScreeningJob.status == "completed", 1)], else_=0)).label("completed"),
+            func.sum(case([(models.ScreeningJob.status.in_(["failed", "dead"]), 1)], else_=0)).label("failed"),
+            func.sum(case([(models.ScreeningJob.status.in_(["pending", "processing"]), 1)], else_=0)).label("pending"),
+            func.max(models.ScreeningJob.jd_text).label("jd_text"),
+            func.max(models.ScreeningJob.batch_name).label("batch_name"),
+            func.max(models.ScreeningJob.top_n).label("top_n")
+        ).filter(
+            models.ScreeningJob.created_by == current_user.id
+        ).group_by(
+            models.ScreeningJob.batch_id
+        ).order_by(
+            func.min(models.ScreeningJob.created_at).desc()
+        ).all()
+        
+        results = []
+        for b in batch_data:
+            jd_text = b.jd_text or ""
+            # Extract custom_prompt if present
+            custom_prompt_text = None
+            clean_jd = jd_text
+            if "[CUSTOM REQUIREMENTS]:" in jd_text:
+                parts = jd_text.split("[CUSTOM REQUIREMENTS]:")
+                clean_jd = parts[0]
+                custom_prompt_text = parts[1].strip() if len(parts) > 1 else None
+
+            jd_lines = [l.strip() for l in clean_jd.split('\n') if l.strip()]
+            title = jd_lines[0][:80] if jd_lines else "General Screening"
+            title = normalize_role(title)
+            
+            results.append({
+                "batch_id": b.batch_id,
+                "created_at": b.created_at,
+                "total": b.total,
+                "completed": int(b.completed or 0),
+                "failed": int(b.failed or 0),
+                "pending": int(b.pending or 0),
+                "role": title,
+                "top_n": b.top_n,
+                "batch_name": b.batch_name,
+                "custom_prompt": custom_prompt_text,
+            })
+        return results
+    except Exception as e:
+        print(f"Error fetching batches: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/batches/{batch_id}/", status_code=status.HTTP_200_OK)
+def delete_screening_batch(
+    batch_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Delete a specific screening batch, clearing its jobs and any candidates still in Resume Screening stage.
+    """
+    try:
+        # Find jobs for this batch
+        jobs = db.query(models.ScreeningJob).filter(
+            models.ScreeningJob.batch_id == batch_id,
+            models.ScreeningJob.created_by == current_user.id
+        ).all()
+        
+        if not jobs:
+            raise HTTPException(status_code=404, detail="Batch not found")
+            
+        candidate_ids = [j.candidate_id for j in jobs if j.candidate_id]
+        
+        # 1. Nullify references first to prevent foreign key violations
+        db.query(models.ScreeningJob).filter(
+            models.ScreeningJob.batch_id == batch_id
+        ).update({models.ScreeningJob.candidate_id: None}, synchronize_session=False)
+        db.commit()
+        
+        # 2. Delete all jobs for this batch
+        db.query(models.ScreeningJob).filter(
+            models.ScreeningJob.batch_id == batch_id
+        ).delete(synchronize_session=False)
+        db.commit()
+        
+        # 3. Clean up candidates that belong to this batch, are still in 'Resume Screening' stage, and are not referenced by other runs
+        deleted_candidates = 0
+        rag_delete_ids = []
+        if candidate_ids:
+            # Find candidate IDs that are still referenced by other jobs (excluding this batch)
+            referenced_elsewhere = db.query(models.ScreeningJob.candidate_id).filter(
+                models.ScreeningJob.batch_id != batch_id,
+                models.ScreeningJob.candidate_id.in_(candidate_ids)
+            ).all()
+            referenced_ids = {r[0] for r in referenced_elsewhere if r[0]}
+
+            # Filter candidate_ids to exclude referenced ones
+            delete_ids = [cid for cid in candidate_ids if cid not in referenced_ids]
+
+            if delete_ids:
+                # Capture which IDs will actually be deleted (match the same filters used below)
+                rag_delete_ids = [
+                    c.id for c in db.query(models.Candidate.id).filter(
+                        models.Candidate.id.in_(delete_ids),
+                        models.Candidate.stage == models.CandidateStage.Resume_Screening.value,
+                        models.Candidate.created_by == current_user.id
+                    ).all()
+                ]
+                deleted_candidates = db.query(models.Candidate).filter(
+                    models.Candidate.id.in_(delete_ids),
+                    models.Candidate.stage == models.CandidateStage.Resume_Screening.value,
+                    models.Candidate.created_by == current_user.id
+                ).delete(synchronize_session=False)
+                db.commit()
+
+        # Remove deleted candidates' vectors from Qdrant
+        if rag_delete_ids:
+            from services.rag_service import RagIndexingService
+            for cid in rag_delete_ids:
+                RagIndexingService.delete_candidate_vectors(cid, current_user.id)
+            
+        # Log activity
+        log = models.ActivityLog(
+            user_id=current_user.id,
+            action="deleted screening batch",
+            target=batch_id,
+            details=f"Cleared jobs and deleted {deleted_candidates} candidate(s)"
+        )
+        db.add(log)
+        db.commit()
+        
+        return {"message": "Batch and associated non-promoted candidates deleted successfully.", "deleted_candidates": deleted_candidates}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting batch: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 

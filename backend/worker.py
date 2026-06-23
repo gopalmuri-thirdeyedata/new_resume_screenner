@@ -130,6 +130,7 @@ def _do_screening(job_id: int) -> dict:
                 "extracted_role":   merged.get("extracted_role", ""),
                 "experience":       merged.get("experience", "None"),
                 "certification_match": merged.get("certification_match", []),
+                "custom_prompt_matches": merged.get("custom_prompt_matches", []),
                 "candidate_summary": merged.get("candidate_summary", ""),
                 "keyword_match_pct": keyword_match_pct
             }
@@ -189,6 +190,7 @@ def _do_screening(job_id: int) -> dict:
                 "extracted_role":   merged.get("extracted_role", ""),
                 "experience":       merged.get("experience", "None"),
                 "certification_match": merged.get("certification_match", []),
+                "custom_prompt_matches": merged.get("custom_prompt_matches", []),
                 "candidate_summary": merged.get("candidate_summary", ""),
                 "keyword_match_pct": keyword_score if has_custom_keywords else None
             }

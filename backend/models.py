@@ -128,6 +128,7 @@ class ScreeningJob(Base):
     __tablename__ = "screening_jobs"
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(String(36), index=True, nullable=False)
+    batch_name = Column(String(200), nullable=True)  # Optional label for the batch
     filename = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)
     jd_text = Column(Text, nullable=False)
