@@ -1,1044 +1,658 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
+import { useNavigate } from 'react-router-dom';
 import {
     Upload, FileText, Brain, Loader2, CheckCircle, AlertCircle,
-    Filter, ChevronRight, X, Sparkles, ChevronDown, ChevronUp,
-    Search, Play, Minus, ArrowRight, FolderOpen, FilePlus, Cloud, HardDrive,
-    Tag, Sliders
+    X, Sparkles, ChevronDown, ArrowRight, FolderOpen, Cloud, HardDrive,
+    Tag, Sliders, Calendar, Trash2, RefreshCw, Layers,
+    Gem, Wand2, Clock, Play, ChevronRight, Plus, Minus,
+    BarChart2, Star, TrendingUp, Zap, MessageSquare, Filter,
+    LayoutGrid, List, Eye, Download, FileSpreadsheet, Lock, Crown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import API_URL from '../apiConfig';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 
-// --- Processing Overlay Component ---
-const ProcessingStatus = ({ batchStatus, completedCount, totalCount, filesCount }) => {
-    const stages = [
-        { id: 'queued', label: 'Uploading Resumes', icon: Upload },
-        { id: 'processing', label: 'AI Screening Active', icon: Brain },
-        { id: 'scoring', label: 'Calculating Scores', icon: Sparkles },
-        { id: 'completed', label: 'Results Ready', icon: CheckCircle },
-    ];
-
-    const stageMap = { queued: 0, processing: 1, scoring: 2, completed: 3 };
-    const currentIdx = stageMap[batchStatus] ?? 1;
-    const progressPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-
+// ─── Score Ring ────────────────────────────────────────────────────────────────
+const ScoreRing = ({ score, size = 56 }) => {
+    const r = (size - 6) / 2;
+    const circ = r * 2 * Math.PI;
+    const offset = circ - (Math.min(score, 100) / 100) * circ;
+    const color = score >= 75 ? '#10b981' : score >= 50 ? '#f59e0b' : '#ef4444';
+    const bg = score >= 75 ? '#ecfdf5' : score >= 50 ? '#fffbe6' : '#fef2f2';
+    const borderGlow = score >= 75 ? 'shadow-[0_0_12px_rgba(16,185,129,0.2)]' : score >= 50 ? 'shadow-[0_0_12px_rgba(245,158,11,0.15)]' : '';
+    
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white border border-blue-100 rounded-2xl p-6 shadow-xl mb-8 relative overflow-hidden"
-        >
-            <div className="absolute top-0 left-0 w-full h-1 bg-gray-100">
-                <motion.div
-                    className="h-full bg-green-600"
-                    initial={{ width: "0%" }}
-                    animate={{ width: `${progressPct || ((currentIdx + 1) / 4) * 100}%` }}
-                    transition={{ duration: 0.5 }}
-                />
-            </div>
-
-            <div className="flex items-center gap-4 mb-6">
-                <div className="w-12 h-12 bg-white border border-gray-100 rounded-xl flex items-center justify-center text-green-600">
-                    <Loader2 className="animate-spin" size={24} />
-                </div>
-                <div>
-                    <h3 className="text-lg font-bold text-gray-900">
-                        Processing {filesCount} resume{filesCount !== 1 ? 's' : ''}…
-                    </h3>
-                    <p className="text-sm text-gray-500">
-                        {completedCount} / {totalCount} completed · Worker is screening in background
-                    </p>
-                </div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {stages.map((s, idx) => {
-                    const isActive = idx === currentIdx;
-                    const isDone = idx < currentIdx;
-                    const Icon = s.icon;
-
-                    return (
-                        <div key={s.id} className={`flex flex-col items-center text-center gap-2 p-3 rounded-xl transition-colors ${isActive ? 'bg-gray-50' : 'opacity-50'}`}>
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isActive ? 'bg-green-600 text-white shadow-lg scale-110' : isDone ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-400'}`}>
-                                {isDone ? <CheckCircle size={16} /> : <Icon size={16} />}
-                            </div>
-                            <span className={`text-xs font-semibold ${isActive ? 'text-green-700' : 'text-gray-500'}`}>{s.label}</span>
-                        </div>
-                    );
-                })}
-            </div>
-        </motion.div>
-    );
-};
-
-// --- Result Card Component ---
-const CandidateResultCard = ({ candidate, rank }) => {
-    const [isExpanded, setIsExpanded] = useState(false);
-
-    // Safety check for analysis data
-    const analysis = candidate.analysis || {};
-    const missingSkills = analysis.missing_skills || [];
-    const matchedSkills = analysis.key_skills_match || [];
-
-    const getScoreColor = (score) => {
-        if (score >= 80) return 'text-green-600 border-green-200 bg-white';
-        if (score >= 60) return 'text-green-600 border-green-200 bg-white';
-        return 'text-red-600 border-red-200 bg-white';
-    };
-
-    return (
-        <motion.div
-            layout
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="bg-white border border-gray-200 rounded-xl p-0 hover:shadow-md transition-shadow overflow-hidden"
-        >
-            <div className={`p-5 flex flex-col md:flex-row items-start md:items-center gap-5 cursor-pointer ${isExpanded ? 'bg-gray-50/50' : ''}`} onClick={() => setIsExpanded(!isExpanded)}>
-                {/* Rank Badge */}
-                <div className="flex-shrink-0 flex flex-col items-center justify-center w-12 text-center">
-                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Rank</span>
-                    <span className="text-2xl font-black text-gray-300">#{rank}</span>
-                </div>
-
-                {/* Candidate Info */}
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-lg font-bold text-slate-900 truncate">{candidate.name || "Unknown"}</h3>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${candidate.status === 'Failed' ? 'bg-white border border-red-200 text-red-600' : 'bg-white border border-green-200 text-[#5d8c2c]'}`}>
-                            {candidate.status}
-                        </span>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm text-gray-500 font-medium">
-                        <span className="flex items-center gap-1.5"><Brain size={14} className="text-green-600" /> {matchedSkills.length} Matching Skills</span>
-                        <span className="flex items-center gap-1.5"><AlertCircle size={14} className="text-green-500" /> {missingSkills.length} Missing</span>
-                    </div>
-                </div>
-
-                {/* Score */}
-                <div className="flex items-center gap-4 flex-shrink-0">
-                    <div className={`flex flex-col items-end`}>
-                        <span className="text-xs font-semibold text-gray-500 uppercase">Match Score</span>
-                        <div className={`text-2xl font-black ${getScoreColor(candidate.score).split(' ')[0]}`}>
-                            {candidate.score || 0}%
-                        </div>
-                    </div>
-                    <button className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-400">
-                        {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                    </button>
-                </div>
-            </div>
-
-            {/* Expanded AI Summary */}
-            <AnimatePresence>
-                {isExpanded && (
-                    <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        className="border-t border-gray-100 bg-white px-5 py-6 space-y-4"
-                    >
-                        <div className="flex items-start gap-3">
-                            <Sparkles className="w-5 h-5 text-purple-600 mt-0.5 flex-shrink-0" />
-                            <div className="space-y-2">
-                                <h4 className="text-sm font-bold text-gray-900">AI Screening Summary</h4>
-                                <p className="text-sm text-gray-600 leading-relaxed">
-                                    {candidate.reasoning}
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pl-8">
-                            <div>
-                                <h5 className="text-xs font-bold text-green-700 uppercase tracking-wide mb-2">Relevant Strengths</h5>
-                                <div className="flex flex-wrap gap-2">
-                                    {matchedSkills.slice(0, 5).map((s, i) => (
-                                        <span key={i} className="px-2 py-1 bg-white text-green-700 rounded text-xs border border-green-100">{s}</span>
-                                    ))}
-                                    {matchedSkills.length > 5 && <span className="text-xs text-gray-400">+{matchedSkills.length - 5} more</span>}
-                                </div>
-                            </div>
-                            <div>
-                                <h5 className="text-xs font-bold text-red-700 uppercase tracking-wide mb-2">Potential Gaps</h5>
-                                <div className="flex flex-wrap gap-2">
-                                    {missingSkills.slice(0, 5).map((s, i) => (
-                                        <span key={i} className="px-2 py-1 bg-white text-red-700 rounded text-xs border border-red-100">{s}</span>
-                                    ))}
-                                    {missingSkills.length === 0 && <span className="text-xs text-gray-400 italic">No major gaps identified.</span>}
-                                </div>
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </motion.div>
-    );
-};
-
-// --- Main Page Component ---
-const ResumeScreening = () => {
-    const [jobDescription, setJobDescription] = useState(() => {
-        return sessionStorage.getItem('rs_jobDescription') || '';
-    });
-    const [files, setFiles] = useState([]);
-    const [filesMetadata, setFilesMetadata] = useState(() => {
-        try {
-            return JSON.parse(sessionStorage.getItem('rs_filesMetadata')) || [];
-        } catch {
-            return [];
-        }
-    });
-    const folderInputRef = useRef(null);
-    const jdFileInputRef = useRef(null);
-    const [showFolderMenu, setShowFolderMenu] = useState(false);
-
-    // Screening Settings
-    const [shortlistCount, setShortlistCount] = useState(() => {
-        return Number(sessionStorage.getItem('rs_shortlistCount')) || 5;
-    });
-
-    // Keyword Matching State
-    const [keywords, setKeywords] = useState(() => {
-        try {
-            return JSON.parse(sessionStorage.getItem('rs_keywords')) || [];
-        } catch {
-            return [];
-        }
-    });
-    const [keywordInput, setKeywordInput] = useState('');
-    const presetSkills = ["Python", "JavaScript", "React", "Node.js", "SQL", "Docker", "AWS", "Machine Learning", "FastAPI"];
-
-    // Additional Requirements / Certifications State
-    const [certifications, setCertifications] = useState(() => {
-        try {
-            return JSON.parse(sessionStorage.getItem('rs_certifications')) || [];
-        } catch {
-            return [];
-        }
-    });
-    const [certInput, setCertInput] = useState('');
-
-    const handleAddCert = () => {
-        const clean = certInput.trim();
-        if (clean && !certifications.includes(clean)) {
-            setCertifications(prev => [...prev, clean]);
-        }
-        setCertInput('');
-    };
-
-    const handleRemoveCert = (cert) => {
-        setCertifications(prev => prev.filter(c => c !== cert));
-    };
-
-    // Custom Upload Modals State
-    const [showLocalModal, setShowLocalModal] = useState(false);
-    const [showOneDriveModal, setShowOneDriveModal] = useState(false);
-
-    const handleAddKeyword = () => {
-        const clean = keywordInput.trim().toLowerCase();
-        if (clean && !keywords.includes(clean)) {
-            setKeywords(prev => [...prev, clean]);
-        }
-        setKeywordInput('');
-    };
-
-    const handleRemoveKeyword = (kw) => {
-        setKeywords(prev => prev.filter(k => k !== kw));
-    };
-
-    const handleTogglePreset = (skill) => {
-        const lower = skill.toLowerCase();
-        if (keywords.includes(lower)) {
-            handleRemoveKeyword(lower);
-        } else {
-            setKeywords(prev => [...prev, lower]);
-        }
-    };
-
-    // Screening State
-    const [isScreening, setIsScreening] = useState(false);
-    const [batchStatus, setBatchStatus] = useState('idle'); // idle | queued | processing | completed | failed
-    const [batchCompleted, setBatchCompleted] = useState(0);
-    const [batchTotal, setBatchTotal] = useState(0);
-    const pollTimerRef = useRef(null);
-
-    const [results, setResults] = useState(() => {
-        try {
-            return JSON.parse(sessionStorage.getItem('rs_results')) || [];
-        } catch {
-            return [];
-        }
-    });
-    const [isPromoting, setIsPromoting] = useState(false);
-    const [promoteSuccess, setPromoteSuccess] = useState(false);
-    const [showResetConfirm, setShowResetConfirm] = useState(false);
-
-    // Sync state changes to sessionStorage
-    useEffect(() => {
-        if (jobDescription) {
-            sessionStorage.setItem('rs_jobDescription', jobDescription);
-        } else {
-            sessionStorage.removeItem('rs_jobDescription');
-        }
-    }, [jobDescription]);
-
-    useEffect(() => {
-        if (keywords.length > 0) {
-            sessionStorage.setItem('rs_keywords', JSON.stringify(keywords));
-        } else {
-            sessionStorage.removeItem('rs_keywords');
-        }
-    }, [keywords]);
-
-    useEffect(() => {
-        if (certifications.length > 0) {
-            sessionStorage.setItem('rs_certifications', JSON.stringify(certifications));
-        } else {
-            sessionStorage.removeItem('rs_certifications');
-        }
-    }, [certifications]);
-
-    useEffect(() => {
-        sessionStorage.setItem('rs_shortlistCount', String(shortlistCount));
-    }, [shortlistCount]);
-
-    useEffect(() => {
-        if (results.length > 0) {
-            sessionStorage.setItem('rs_results', JSON.stringify(results));
-        } else {
-            sessionStorage.removeItem('rs_results');
-        }
-    }, [results]);
-
-    useEffect(() => {
-        if (files.length > 0) {
-            const meta = files.map(f => ({ name: f.name, size: f.size }));
-            sessionStorage.setItem('rs_filesMetadata', JSON.stringify(meta));
-            setFilesMetadata(meta);
-        }
-    }, [files]);
-
-    const handleResetAll = () => {
-        setJobDescription('');
-        setFiles([]);
-        setFilesMetadata([]);
-        setKeywords([]);
-        setCertifications([]);
-        setResults([]);
-        setBatchStatus('idle');
-        setBatchCompleted(0);
-        setBatchTotal(0);
-        setPromoteSuccess(false);
-        setShowResetConfirm(false);
-        // Clear only the rs_* keys, not all sessionStorage
-        ['rs_jobDescription', 'rs_keywords', 'rs_certifications', 'rs_shortlistCount', 'rs_results', 'rs_filesMetadata'].forEach(k => sessionStorage.removeItem(k));
-    };
-
-    const filesToDisplay = files.length > 0 ? files : filesMetadata;
-
-    // Validation
-    const handleConfirmUpload = (newFiles) => {
-        setFiles(prev => {
-            const existing = new Set(prev.map(f => f.name));
-            return [...prev, ...newFiles.filter(f => !existing.has(f.name))];
-        });
-    };
-
-    const handleFolderUpload = (e) => {
-        const folderFiles = Array.from(e.target.files).filter(f =>
-            f.name.endsWith('.pdf') || f.name.endsWith('.doc') || f.name.endsWith('.docx')
-        );
-        setFiles(prev => {
-            const existing = new Set(prev.map(f => f.name));
-            return [...prev, ...folderFiles.filter(f => !existing.has(f.name))];
-        });
-        e.target.value = '';
-    };
-
-    const handleJDFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        // For plain text / txt files, read directly
-        if (file.type === 'text/plain') {
-            const reader = new FileReader();
-            reader.onload = (ev) => setJobDescription(ev.target.result);
-            reader.readAsText(file);
-        } else {
-            // For PDF/DOC, send to backend to extract text
-            const formData = new FormData();
-            formData.append('file', file);
-            const token = localStorage.getItem('token');
-            fetch(`${API_URL}/api/resume/extract-text/`, {
-                method: 'POST',
-                headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-                body: formData
-            })
-            .then(r => r.json())
-            .then(d => { if (d.text) setJobDescription(d.text); })
-            .catch(() => alert('Could not extract text from file. Please paste the JD manually.'));
-        }
-        e.target.value = '';
-    };
-
-    const handlePromoteToNextStage = async () => {
-        if (!results.length) return;
-        setIsPromoting(true);
-        try {
-            const token = localStorage.getItem('token');
-            const candidateIds = results
-                .filter(r => r.status === 'Screened' && r.candidate?.id)
-                .map(r => r.candidate.id);
-            if (!candidateIds.length) { setIsPromoting(false); return; }
-            const response = await fetch(`${API_URL}/api/resume/candidates/bulk-update/`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-                body: JSON.stringify({ candidate_ids: candidateIds, stage: 'NEXT' })
-            });
-            if (response.ok) {
-                setPromoteSuccess(true);
-            }
-        } catch (err) {
-            console.error('Promote failed:', err);
-        }
-        setIsPromoting(false);
-    };
-
-    // Validation
-    const isCountInvalid = filesToDisplay.length > 0 && shortlistCount > filesToDisplay.length;
-    const isValidToStart = files.length > 0 && jobDescription.trim() && !isCountInvalid && shortlistCount > 0;
-
-    // Drag & Drop
-    const onDrop = useCallback((acceptedFiles) => {
-        setFiles(prev => [...prev, ...acceptedFiles]);
-    }, []);
-
-    const { getRootProps, getInputProps, isDragActive } = useDropzone({
-        onDrop,
-        accept: { 'application/pdf': ['.pdf'], 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] }
-    });
-
-    // Clean up polling on unmount
-    useEffect(() => {
-        return () => {
-            if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-        };
-    }, []);
-
-    const startScreening = async () => {
-        if (!isValidToStart) return;
-
-        // Clear old polling
-        if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-
-        setIsScreening(true);
-        setResults([]);
-        setBatchStatus('queued');
-        setBatchCompleted(0);
-        setBatchTotal(files.length);
-        setPromoteSuccess(false);
-
-        const formData = new FormData();
-        formData.append('job_description', jobDescription);
-        formData.append('top_n', shortlistCount);
-        if (keywords.length > 0) {
-            formData.append('keywords', keywords.join(', '));
-        }
-        if (certifications.length > 0) {
-            formData.append('certifications', certifications.join(', '));
-        }
-        for (let i = 0; i < files.length; i++) {
-            formData.append('files', files[i]);
-        }
-
-        try {
-            const token = localStorage.getItem('token');
-
-            // Step 1: Submit the batch — backend enqueues to Redis, returns batch_id
-            const response = await fetch(`${API_URL}/api/resume/screen/`, {
-                method: 'POST',
-                headers: {
-                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-                },
-                body: formData
-            });
-
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                throw new Error(err.detail || `HTTP ${response.status}`);
-            }
-
-            const data = await response.json();
-            const batchId = data.batch_id;
-
-            if (!batchId) {
-                throw new Error('No batch_id returned from server.');
-            }
-
-            setBatchStatus('processing');
-
-            // Step 2: Poll batch status every 3 seconds
-            const pollBatch = async () => {
-                try {
-                    const pollRes = await fetch(`${API_URL}/api/resume/screen/batch/${batchId}`, {
-                        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
-                    });
-                    if (!pollRes.ok) return;
-                    const pollData = await pollRes.json();
-
-                    setBatchCompleted(pollData.completed || 0);
-                    setBatchTotal(pollData.total || files.length);
-
-                    // Update stage indicator
-                    if (pollData.completed > 0) {
-                        setBatchStatus('scoring');
-                    }
-
-                    const isDone = pollData.status === 'completed';
-                    if (isDone) {
-                        clearInterval(pollTimerRef.current);
-                        pollTimerRef.current = null;
-
-                        setBatchStatus('completed');
-
-                        // Map completed job results → display cards
-                        const mappedResults = (pollData.results || [])
-                            .filter(res => res.status === 'completed' && res.candidate)
-                            .map((res, i) => ({
-                                id: `res-${Date.now()}-${i}`,
-                                name: res.candidate?.name || res.filename || `Candidate ${i + 1}`,
-                                score: res.candidate?.score || (res.analysis?.score) || 0,
-                                status: 'Screened',
-                                analysis: res.analysis || {},
-                                reasoning: res.analysis?.reasoning || 'Analysis complete.',
-                                candidate: res.candidate,
-                                error: null
-                            }));
-
-                        // Include failed jobs too
-                        const failedResults = (pollData.results || [])
-                            .filter(res => res.status === 'failed' || res.status === 'dead')
-                            .map((res, i) => ({
-                                id: `fail-${Date.now()}-${i}`,
-                                name: res.filename || `Resume ${i + 1}`,
-                                score: 0,
-                                status: 'Failed',
-                                analysis: {},
-                                reasoning: res.error || 'Processing failed.',
-                                candidate: null,
-                                error: res.error
-                            }));
-
-                        const allResults = [...mappedResults, ...failedResults]
-                            .sort((a, b) => b.score - a.score);
-
-                        setResults(allResults);
-                        setIsScreening(false);
-                        setBatchStatus('idle');
-                    }
-                } catch (err) {
-                    console.error('Polling error:', err);
-                }
-            };
-
-            // Start polling immediately then every 3s
-            pollBatch();
-            pollTimerRef.current = setInterval(pollBatch, 3000);
-
-        } catch (err) {
-            console.error('Screening error:', err);
-            setIsScreening(false);
-            setBatchStatus('idle');
-        }
-    };
-
-    return (
-        <div className="max-w-7xl mx-auto pb-10 px-4 sm:px-6 lg:px-8">
-            {/* Header */}
-            <div className="mb-6">
-                <h1 className="text-3xl font-semibold text-[#5d8c2c] tracking-tight">AI Resume Screening</h1>
-                <p className="text-black mt-2 text-sm font-medium">
-                    Upload resumes to parse, evaluate, and rank candidates against your specific job criteria in real-time.
-                </p>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-180px)]">
-
-                {/* LEFT COLUMN: Inputs & Upload (Sticky & Scrollable) */}
-                <div className="lg:col-span-4 flex flex-col h-full overflow-hidden">
-                    <div className="flex flex-col space-y-4 overflow-y-auto pr-1 pb-4 flex-1 custom-scrollbar">
-                        {/* Card 1: Job Description */}
-                        <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow duration-300 flex flex-col">
-                            <div className="flex justify-between items-center mb-3">
-                                <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight">
-                                    <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
-                                        <FileText size={14} className="text-[#5d8c2c]" />
-                                    </div>
-                                    Job Description *
-                                </h3>
-                                <div className="flex items-center gap-2">
-                                    {/* JD File Upload */}
-                                    <button
-                                        onClick={() => jdFileInputRef.current?.click()}
-                                        title="Upload JD from file (PDF, DOC, TXT)"
-                                        className="text-xs font-semibold text-white flex items-center gap-1.5 bg-gradient-to-r from-[#5d8c2c] to-[#4a7a1f] px-3 py-1.5 rounded-lg hover:shadow-md hover:shadow-green-200/50 hover:-translate-y-0.5 transition-all duration-200"
-                                    >
-                                        <FilePlus size={12} /> Upload File
-                                    </button>
-                                    <input
-                                        ref={jdFileInputRef}
-                                        type="file"
-                                        accept=".pdf,.doc,.docx,.txt"
-                                        onChange={handleJDFileUpload}
-                                        className="hidden"
-                                    />
-                                    <button onClick={() => setJobDescription('')} className="text-xs text-gray-400 hover:text-red-500 font-medium transition-colors">Clear</button>
-                                </div>
-                            </div>
-                            <textarea
-                                value={jobDescription}
-                                onChange={(e) => setJobDescription(e.target.value)}
-                                placeholder="Paste or type job description here... (Mandatory)"
-                                className="w-full h-32 bg-gray-50/80 border border-gray-200 rounded-xl p-3 text-xs focus:outline-none focus:ring-2 focus:ring-[#5d8c2c]/30 focus:border-[#5d8c2c]/50 resize-none transition-all placeholder:text-gray-400"
-                            />
-                        </div>
-
-                        {/* Card 2: Keyword Matching */}
-                        <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow duration-300 flex flex-col">
-                            <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight mb-3">
-                                <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
-                                    <Tag size={14} className="text-[#5d8c2c]" />
-                                </div>
-                                Keyword Matching
-                            </h3>
-                            <p className="text-[11px] text-gray-500 font-medium mb-3 leading-relaxed">
-                                Type custom keywords or select predefined skills. Matches will be required (minimum 20% match score).
-                            </p>
-                            
-                            {/* Keyword Input */}
-                            <div className="flex gap-2 mb-3">
-                                <input
-                                    type="text"
-                                    value={keywordInput}
-                                    onChange={(e) => setKeywordInput(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') {
-                                            e.preventDefault();
-                                            handleAddKeyword();
-                                        }
-                                    }}
-                                    placeholder="Type a keyword & press Enter"
-                                    className="flex-1 px-3 py-1.5 bg-gray-50/80 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#5d8c2c]/30 focus:border-[#5d8c2c]/50"
-                                />
-                                <button
-                                    onClick={handleAddKeyword}
-                                    className="text-xs font-semibold text-white bg-[#5d8c2c] px-3 py-1.5 rounded-lg hover:bg-[#4a7a1f] transition-colors"
-                                >
-                                    Add
-                                </button>
-                            </div>
-
-                            {/* Presets Grid */}
-                            <div className="mb-3">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block mb-1.5">Common Preset Skills</span>
-                                <div className="flex flex-wrap gap-1.5 max-h-16 overflow-y-auto pr-1">
-                                    {presetSkills.map(skill => {
-                                        const hasSkill = keywords.includes(skill.toLowerCase());
-                                        return (
-                                            <button
-                                                key={skill}
-                                                onClick={() => handleTogglePreset(skill)}
-                                                className={`text-[10px] px-2 py-0.5 rounded-full font-medium transition-all ${
-                                                    hasSkill
-                                                        ? 'bg-[#5d8c2c] text-white'
-                                                        : 'bg-gray-100 text-gray-650 hover:bg-gray-200'
-                                                }`}
-                                            >
-                                                {skill}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            {/* Selected Chips */}
-                            <div className="overflow-y-auto pr-1">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block mb-1.5">Active Keywords ({keywords.length})</span>
-                                {keywords.length === 0 ? (
-                                    <p className="text-xs text-gray-400 italic">No keywords added. Matching will be skipped.</p>
-                                ) : (
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {keywords.map(kw => (
-                                            <span
-                                                key={kw}
-                                                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-lg font-medium"
-                                            >
-                                                {kw}
-                                                <button onClick={() => handleRemoveKeyword(kw)} className="hover:text-red-500 transition-colors">
-                                                    <X size={10} />
-                                                </button>
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Card 4: Additional Requirements / Certifications */}
-                        <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow duration-300 flex flex-col">
-                            <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight mb-3">
-                                <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
-                                    <Sliders size={14} className="text-[#5d8c2c]" />
-                                </div>
-                                Additional Requirements / Certifications
-                            </h3>
-                            <p className="text-[11px] text-gray-500 font-medium mb-3 leading-relaxed">
-                                Enter certifications, qualifications, achievements, or special criteria.
-                            </p>
-                            
-                            {/* Certifications Input */}
-                            <div className="flex gap-2 mb-3">
-                                <input
-                                    type="text"
-                                    value={certInput}
-                                    onChange={(e) => setCertInput(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') {
-                                            e.preventDefault();
-                                            handleAddCert();
-                                        }
-                                    }}
-                                    placeholder="e.g. AWS Certified Architect & press Enter"
-                                    className="flex-1 px-3 py-1.5 bg-gray-50/80 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#5d8c2c]/30 focus:border-[#5d8c2c]/50"
-                                />
-                                <button
-                                    onClick={handleAddCert}
-                                    className="text-xs font-semibold text-white bg-[#5d8c2c] px-3 py-1.5 rounded-lg hover:bg-[#4a7a1f] transition-colors"
-                                >
-                                    Add
-                                </button>
-                            </div>
-
-                            {/* Selected Chips */}
-                            <div className="overflow-y-auto pr-1">
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block mb-1.5">Active Requirements ({certifications.length})</span>
-                                {certifications.length === 0 ? (
-                                    <p className="text-xs text-gray-400 italic">No additional requirements added.</p>
-                                ) : (
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {certifications.map(cert => (
-                                            <span
-                                                key={cert}
-                                                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-lg font-medium"
-                                            >
-                                                {cert}
-                                                <button onClick={() => handleRemoveCert(cert)} className="hover:text-red-500 transition-colors">
-                                                    <X size={10} />
-                                                </button>
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Card 3: Upload Resumes */}
-                        <div className="bg-white border border-gray-200/80 rounded-2xl p-5 shadow-sm flex flex-col hover:shadow-md transition-shadow duration-300">
-                            <div className="flex items-center justify-between mb-3">
-                                <h3 className="font-bold text-[#5d8c2c] flex items-center gap-2 text-sm tracking-tight">
-                                    <div className="w-7 h-7 bg-green-100 rounded-lg flex items-center justify-center">
-                                        <Upload size={14} className="text-[#5d8c2c]" />
-                                    </div>
-                                    Upload Resumes
-                                </h3>
-                                {/* Folder Upload Button with Dropdown */}
-                                <div className="relative">
-                                    <button
-                                        onClick={() => setShowFolderMenu(v => !v)}
-                                        title="Upload resumes from local storage or cloud"
-                                        className="text-xs font-semibold text-white flex items-center gap-1.5 bg-gradient-to-r from-[#5d8c2c] to-[#4a7a1f] px-3 py-1.5 rounded-lg hover:shadow-md hover:shadow-green-200/50 hover:-translate-y-0.5 transition-all duration-200"
-                                    >
-                                        <FolderOpen size={12} /> Folder Upload <ChevronDown size={10} />
-                                    </button>
-
-                                    {/* Dropdown Menu */}
-                                    {showFolderMenu && (
-                                        <>
-                                            {/* Backdrop to close menu */}
-                                            <div className="fixed inset-0 z-45" onClick={() => setShowFolderMenu(false)} />
-                                            <div className="absolute right-0 top-full mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                                <div className="p-1.5 space-y-0.5">
-                                                    <button
-                                                        onClick={() => {
-                                                            setShowFolderMenu(false);
-                                                            setShowOneDriveModal(true);
-                                                        }}
-                                                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors text-left"
-                                                    >
-                                                        <Cloud size={16} className="text-blue-500" />
-                                                        OneDrive
-                                                    </button>
-                                                    <button
-                                                        onClick={() => {
-                                                            setShowFolderMenu(false);
-                                                            setShowLocalModal(true);
-                                                        }}
-                                                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors text-left"
-                                                    >
-                                                        <HardDrive size={16} className="text-green-600" />
-                                                        From Local
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div
-                                {...getRootProps()}
-                                className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 group ${files.length > 0 ? 'p-3' : 'p-8'} ${isDragActive ? 'border-[#5d8c2c] bg-green-50/80 scale-[1.01]' : 'border-gray-300 hover:border-[#5d8c2c]/60 hover:bg-green-50/30'} flex-shrink-0`}
-                            >
-                                <input {...getInputProps()} />
-                                {files.length === 0 ? (
-                                    <>
-                                        <div className="w-12 h-12 bg-gradient-to-br from-green-100 to-green-50 text-[#5d8c2c] rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 group-hover:shadow-md group-hover:shadow-green-100 transition-all duration-300">
-                                            <Upload size={20} />
-                                        </div>
-                                        <p className="text-sm font-semibold text-gray-700">Click or drag files here</p>
-                                        <p className="text-xs text-gray-400 mt-1">Supports PDF, DOC, DOCX</p>
-                                    </>
-                                ) : (
-                                    <div className="flex items-center gap-2 text-xs text-gray-500 font-medium">
-                                        <Upload size={14} className="text-[#5d8c2c]" />
-                                        <span>Click or drag to add more files</span>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* File Queue - Internal Scroll */}
-                            {filesToDisplay.length > 0 ? (
-                                <div className="mt-3 flex flex-col overflow-hidden">
-                                    <div className="flex justify-between text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">
-                                        <span>{filesToDisplay.length} files queued</span>
-                                        <button onClick={() => { setFiles([]); setFilesMetadata([]); sessionStorage.removeItem('rs_filesMetadata'); }} className="text-red-500 hover:underline normal-case">Remove All</button>
-                                    </div>
-                                    <div className="overflow-y-auto custom-scrollbar max-h-40 space-y-1.5 pr-1">
-                                        {filesToDisplay.map((file, idx) => (
-                                            <div key={idx} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg text-xs border border-gray-100">
-                                                <div className="flex items-center gap-2 overflow-hidden">
-                                                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${idx < batchCompleted ? 'bg-green-500' : isScreening ? 'bg-amber-400 animate-pulse' : 'bg-gray-300'}`} />
-                                                    <span className="truncate max-w-[180px] font-medium text-gray-700">{file.name}</span>
-                                                </div>
-                                                {isScreening && <Loader2 size={12} className="animate-spin text-green-600 shrink-0" />}
-                                                {!isScreening && (
-                                                    <button onClick={() => {
-                                                        setFiles(prev => prev.filter(f => f.name !== file.name));
-                                                        setFilesMetadata(prev => prev.filter(f => f.name !== file.name));
-                                                        const updatedMeta = filesMetadata.filter(f => f.name !== file.name);
-                                                        if (updatedMeta.length > 0) {
-                                                            sessionStorage.setItem('rs_filesMetadata', JSON.stringify(updatedMeta));
-                                                        } else {
-                                                            sessionStorage.removeItem('rs_filesMetadata');
-                                                        }
-                                                    }} className="text-gray-400 hover:text-red-500 p-0.5">
-                                                        <X size={14} />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="flex items-center justify-center text-center p-4">
-                                    <p className="text-xs text-gray-400 italic">No files selected. Drag resumes here or click Folder Upload.</p>
-                                </div>
-                            )}
-                        </div>
-
-
-                    </div>
-                </div>
-
-                {/* RIGHT COLUMN: Results & Actions */}
-                <div className="lg:col-span-8 flex flex-col h-full overflow-hidden">
-
-                    {/* Header with Actions (Sticky) */}
-                    <div className="bg-white border border-gray-200/80 rounded-2xl p-4 mb-4 shadow-sm transition-all duration-300 hover:shadow-md">
-                        {/* Row 1: Title + Process to Next Stage */}
-                        <div className="flex items-center justify-between gap-3 mb-3">
-                            <h2 className="text-lg font-bold text-[#5d8c2c] flex items-center gap-2 tracking-tight">
-                                <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
-                                    <Sparkles size={16} className="text-[#5d8c2c]" />
-                                </div>
-                                Screening Results
-                                {results.length > 0 && (
-                                    <span className="text-xs font-semibold text-[#5d8c2c] px-2.5 py-0.5 bg-green-50 rounded-full border border-green-200">
-                                        {results.length} result{results.length !== 1 ? 's' : ''} / {batchTotal || filesToDisplay.length} submitted
-                                    </span>
-                                )}
-                            </h2>
-                        {/* Reset button – always visible */}
-                        <button
-                            onClick={() => setShowResetConfirm(true)}
-                            disabled={results.length === 0 && !jobDescription && filesToDisplay.length === 0 && keywords.length === 0 && certifications.length === 0}
-                            className="px-3.5 py-1.5 border border-red-200 hover:bg-red-50 text-red-500 hover:text-red-700 rounded-xl font-bold text-xs transition-all shadow-sm disabled:opacity-30 disabled:cursor-not-allowed"
-                            title="Reset all screening data"
-                        >
-                            Reset Screening
-                        </button>
-
-                        </div>
-
-                        {/* Row 2: Start Screening button */}
-                        <div className="flex items-center justify-end gap-3">
-                            {/* Shortlist Setting inline */}
-                            <div className="flex items-center gap-3 bg-gray-50 px-4 py-2 rounded-xl border border-gray-200" title="Top candidates to return">
-                                <div className="flex items-center gap-1.5 text-gray-655">
-                                    <Sliders size={14} className="text-[#5d8c2c]" />
-                                    <span className="text-xs font-bold whitespace-nowrap">Shortlist:</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="1"
-                                    max={filesToDisplay.length > 0 ? filesToDisplay.length : 20}
-                                    value={shortlistCount}
-                                    onChange={(e) => setShortlistCount(parseInt(e.target.value) || 1)}
-                                    className="w-24 accent-[#5d8c2c] cursor-pointer h-1.5 bg-gray-200 rounded-lg appearance-none"
-                                />
-                                <input
-                                    type="number"
-                                    min="1"
-                                    value={shortlistCount}
-                                    onChange={(e) => setShortlistCount(parseInt(e.target.value) || 1)}
-                                    className={`w-10 bg-white border border-gray-200 rounded text-center text-xs font-bold py-0.5 focus:outline-none focus:ring-1 focus:ring-[#5d8c2c] ${isCountInvalid ? 'text-red-650 border-red-300' : 'text-gray-900'}`}
-                                />
-                            </div>
-
-                            <button
-                                onClick={startScreening}
-                                disabled={!isValidToStart || isScreening}
-                                className={`px-6 py-2 rounded-lg font-semibold text-sm flex items-center gap-2 transition-all shadow-md whitespace-nowrap ${!isValidToStart || isScreening
-                                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
-                                    : 'bg-gradient-to-r from-green-600 to-green-700 text-white hover:shadow-lg hover:-translate-y-0.5'
-                                    }`}
-                            >
-                                {isScreening ? (
-                                    <><Loader2 size={16} className="animate-spin" /> Processing...</>
-                                ) : (
-                                    <>Start Screening <Play size={16} fill="currentColor" /></>
-                                )}
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Validation Error Banner (If Invalid) */}
-                    {isCountInvalid && (
-                        <motion.div
-                            initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
-                            className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center gap-2 text-sm text-red-700"
-                        >
-                            <AlertCircle size={16} />
-                            <strong>Action Required:</strong> Candidate count ({shortlistCount}) cannot exceed uploaded resumes ({filesToDisplay.length}).
-                        </motion.div>
-                    )}
-
-                    {/* Scrollable Content Area */}
-                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 pb-4">
-                        {/* 1. Active Processing Card */}
-                        <AnimatePresence>
-                            {isScreening && (
-                                <ProcessingStatus
-                                    batchStatus={batchStatus}
-                                    completedCount={batchCompleted}
-                                    totalCount={batchTotal}
-                                    filesCount={filesToDisplay.length}
-                                />
-                            )}
-                        </AnimatePresence>
-
-                        {/* 2. Results List */}
-                        <div className="space-y-4">
-                            {results.length === 0 && !isScreening && (
-                                <div className="border-2 border-dashed border-gray-200 rounded-2xl h-full min-h-[300px] flex flex-col items-center justify-center text-gray-400 bg-gray-50/50">
-                                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mb-3">
-                                        <Brain size={24} className="text-green-500 opacity-20" />
-                                    </div>
-                                    <p className="font-bold text-[#5d8c2c]">Ready to Analyze</p>
-                                    <p className="text-sm text-gray-500">Upload resumes → Click Start Screening</p>
-                                </div>
-                            )}
-
-                            <AnimatePresence>
-                                {results.map((candidate, idx) => (
-                                    <CandidateResultCard key={candidate.id} candidate={candidate} rank={idx + 1} />
-                                ))}
-                            </AnimatePresence>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            {/* Custom Upload Modals */}
-            <AnimatePresence>
-                {showLocalModal && (
-                    <LocalUploadModal
-                        isOpen={showLocalModal}
-                        onClose={() => setShowLocalModal(false)}
-                        onUpload={handleConfirmUpload}
-                    />
-                )}
-                {showOneDriveModal && (
-                    <OneDriveModal
-                        isOpen={showOneDriveModal}
-                        onClose={() => setShowOneDriveModal(false)}
-                    />
-                )}
-            </AnimatePresence>
-
-            {/* Reset Confirmation Dialog */}
-            {showResetConfirm && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowResetConfirm(false)}>
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden" onClick={e => e.stopPropagation()}>
-                        <div className="p-6">
-                            <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
-                                <AlertCircle size={24} className="text-red-600" />
-                            </div>
-                            <h3 className="text-base font-bold text-gray-900 text-center mb-2">Reset Screening Data?</h3>
-                            <p className="text-sm text-gray-500 text-center leading-relaxed">
-                                This will clear all results, uploaded files, keywords, and settings. This action cannot be undone.
-                            </p>
-                        </div>
-                        <div className="flex gap-3 px-6 pb-6">
-                            <button
-                                onClick={() => setShowResetConfirm(false)}
-                                className="flex-1 px-4 py-2.5 text-sm font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleResetAll}
-                                className="flex-1 px-4 py-2.5 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors"
-                            >
-                                Reset All
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+        <div className={`relative flex items-center justify-center rounded-full shrink-0 ${borderGlow}`} style={{ width: size, height: size, background: bg }}>
+            <svg className="absolute transform -rotate-90" style={{ width: '100%', height: '100%' }}>
+                <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#f1f5f9" strokeWidth={4.5} />
+                <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={4.5}
+                    strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+                    style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1)' }} />
+            </svg>
+            <span className="text-xs font-black tracking-tight" style={{ color }}>{Math.round(score)}%</span>
         </div>
     );
 };
 
-// --- Custom Modals for Uploading ---
+// ─── Score Bar ────────────────────────────────────────────────────────────────
+const ScoreBar = ({ label, value, max, color = '#5d8c2c' }) => (
+    <div className="space-y-1">
+        <div className="flex justify-between items-center text-[11px] font-semibold text-slate-500">
+            <span>{label}</span>
+            <span className="font-bold text-slate-800">{value} / {max}</span>
+        </div>
+        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-700 ease-out"
+                style={{ width: `${(value / max) * 100}%`, background: color }} />
+        </div>
+    </div>
+);
+
+// ─── Custom Req Badge ─────────────────────────────────────────────────────────
+const GemBadge = ({ label }) => (
+    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-violet-50 text-violet-700 border border-violet-200 shadow-sm animate-pulse-subtle">
+        <Gem size={8} className="text-violet-600 animate-spin-slow" /> {label}
+    </span>
+);
+
+const cleanPhone = (phone) => {
+    if (!phone) return '';
+    const digits = phone.replace(/\D/g, '');
+    return digits.length > 10 ? digits.slice(-10) : digits || phone;
+};
+
+const formatDate = (dateStr) => {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+const stripMarkdown = (text) => {
+    if (!text) return '';
+    return String(text)
+        .replace(/#+\s+/g, '')
+        .replace(/[*`~_]/g, '')
+        .replace(/^[ \t]*[-*+]\s+/gm, '• ')
+        .replace(/\n\s*\n/g, '\n')
+        .trim();
+};
+
+const AVAILABLE_COLUMNS = [
+    { key: 'name', label: 'Name' },
+    { key: 'phone', label: 'Phone' },
+    { key: 'email', label: 'Email' },
+    { key: 'score', label: 'Score' },
+    { key: 'role', label: 'Role' },
+    { key: 'location', label: 'Location' },
+    { key: 'education_details', label: 'Education' },
+    { key: 'experience', label: 'Total Experience' },
+    { key: 'keyword_match_pct', label: 'Keyword Match %' },
+    { key: 'key_skills_match', label: 'Matched Keywords' },
+    { key: 'candidate_summary', label: 'Summary' },
+    { key: 'certification_match', label: 'Certification Matches' },
+    { key: 'custom_prompt_matches', label: 'Custom Req. Matches' },
+    { key: 'missing_skills', label: 'Missing Skills / Gaps' },
+    { key: 'reasoning', label: 'AI Evaluation Reasoning' },
+];
+
+const exportToPDF = (candidates, selectedColumns) => {
+    const compactKeys = ['name', 'phone', 'email', 'score', 'role', 'location', 'education_details', 'experience', 'keyword_match_pct'];
+    const compactCols = selectedColumns.filter(col => compactKeys.includes(col.key));
+    const detailKeys = ['key_skills_match', 'missing_skills', 'candidate_summary', 'certification_match', 'custom_prompt_matches', 'reasoning'];
+    const hasDetails = selectedColumns.some(col => detailKeys.includes(col.key));
+
+    const orientation = compactCols.length > 4 ? 'landscape' : 'portrait';
+    const doc = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
+    
+    doc.setFontSize(16);
+    doc.setTextColor(16, 185, 129);
+    doc.text("Screened Candidates Report", 14, 18);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`Generated on: ${new Date().toLocaleDateString()} | Total Candidates: ${candidates.length}`, 14, 24);
+
+    if (compactCols.length > 0) {
+        const headers = [["Rank", ...compactCols.map(col => col.label)]];
+        const body = candidates.map((c, i) => [
+            i + 1,
+            ...compactCols.map(col => {
+                const a = c.analysis || {};
+                if (col.key === 'name') return c.name || '—';
+                if (col.key === 'phone') return cleanPhone(c.candidate?.phone || c.phone) || '—';
+                if (col.key === 'email') { const e = c.candidate?.email || c.email; return (e && !e.startsWith('no-email-')) ? e : '—'; }
+                if (col.key === 'score') return c.score != null ? `${Math.round(c.score)}%` : '—';
+                if (col.key === 'role') return c.role || c.candidate?.role || '—';
+                if (col.key === 'location') return a.location || '—';
+                if (col.key === 'education_details') return a.education_details || '—';
+                if (col.key === 'experience') return a.experience || '—';
+                if (col.key === 'keyword_match_pct') return a.keyword_match_pct != null ? `${Number(a.keyword_match_pct).toFixed(0)}%` : '—';
+                return '—';
+            })
+        ]);
+
+        autoTable(doc, {
+            startY: 28,
+            head: headers,
+            body,
+            theme: 'striped',
+            headStyles: { fillColor: [16, 185, 129] },
+            styles: { fontSize: 8, cellPadding: 2.5, overflow: 'linebreak' }
+        });
+    }
+
+    if (hasDetails) {
+        candidates.forEach((c, idx) => {
+            doc.addPage();
+            const a = c.analysis || {};
+            
+            doc.setFontSize(14);
+            doc.setTextColor(16, 185, 129);
+            doc.text(`Candidate Dossier: ${c.name || 'Unknown'}`, 14, 18);
+            
+            doc.setFontSize(9);
+            doc.setTextColor(100, 100, 100);
+            doc.text(`Rank: #${idx + 1}  |  Score: ${c.score != null ? Math.round(c.score) : 0}%  |  Role: ${c.role || c.candidate?.role || '—'}`, 14, 24);
+            const rawEmail = c.email || c.candidate?.email;
+            const displayEmail = (rawEmail && !rawEmail.startsWith('no-email-')) ? rawEmail : '—';
+            doc.text(`Email: ${displayEmail}  |  Phone: ${cleanPhone(c.phone || c.candidate?.phone) || '—'}`, 14, 29);
+            
+            const detailRows = [];
+            
+            if (selectedColumns.some(col => col.key === 'candidate_summary')) {
+                detailRows.push(["Executive Summary", stripMarkdown(a.candidate_summary || a.reasoning || '—')]);
+            }
+            if (selectedColumns.some(col => col.key === 'key_skills_match')) {
+                const skillsList = Array.isArray(a.key_skills_match) ? a.key_skills_match.join(', ') : '—';
+                detailRows.push(["Matched Skills", skillsList]);
+            }
+            if (selectedColumns.some(col => col.key === 'missing_skills')) {
+                const missingList = Array.isArray(a.missing_skills) ? a.missing_skills.join(', ') : '—';
+                detailRows.push(["Missing Skills / Gaps", missingList]);
+            }
+            if (selectedColumns.some(col => col.key === 'certification_match')) {
+                const certsList = Array.isArray(a.certification_match) ? a.certification_match.join(', ') : '—';
+                detailRows.push(["Certification Matches", certsList]);
+            }
+            if (selectedColumns.some(col => col.key === 'custom_prompt_matches')) {
+                const customPromptList = Array.isArray(a.custom_prompt_matches) ? a.custom_prompt_matches.join(', ') : '—';
+                detailRows.push(["Custom Req. Matches", customPromptList]);
+            }
+            if (selectedColumns.some(col => col.key === 'reasoning')) {
+                detailRows.push(["AI Reasoning", stripMarkdown(a.reasoning || '—')]);
+            }
+            
+            autoTable(doc, {
+                startY: 34,
+                head: [["Section", "Details"]],
+                body: detailRows,
+                theme: 'grid',
+                headStyles: { fillColor: [79, 70, 229] },
+                columnStyles: {
+                    0: { fontStyle: 'bold', width: 45, fillColor: [249, 250, 251] },
+                    1: { cellWidth: 'auto', overflow: 'linebreak' }
+                },
+                styles: { fontSize: 8.5, cellPadding: 4 }
+            });
+        });
+    }
+
+    doc.save(`screened_candidates_${new Date().toISOString().slice(0, 10)}.pdf`);
+};
+
+const exportToExcel = (candidates, selectedColumns) => {
+    const headers = ['Rank', ...selectedColumns.map(col => col.label)];
+    const data = candidates.map((c, i) => {
+        const row = { 'Rank': i + 1 };
+        const a = c.analysis || {};
+        selectedColumns.forEach(col => {
+            if (col.key === 'name') row[col.label] = c.name || '—';
+            else if (col.key === 'phone') row[col.label] = cleanPhone(c.candidate?.phone || c.phone) || '—';
+            else if (col.key === 'email') { const e = c.candidate?.email || c.email; row[col.label] = (e && !e.startsWith('no-email-')) ? e : '—'; }
+            else if (col.key === 'score') row[col.label] = c.score != null ? `${c.score.toFixed(2)}%` : '—';
+            else if (col.key === 'role') row[col.label] = c.role || c.candidate?.role || '—';
+            else if (col.key === 'location') row[col.label] = a.location || '—';
+            else if (col.key === 'education_details') row[col.label] = a.education_details || '—';
+            else if (col.key === 'experience') row[col.label] = a.experience || '—';
+            else if (col.key === 'keyword_match_pct') row[col.label] = a.keyword_match_pct != null ? `${Number(a.keyword_match_pct).toFixed(2)}%` : '—';
+            else if (col.key === 'key_skills_match') row[col.label] = Array.isArray(a.key_skills_match) ? a.key_skills_match.join(', ') : '—';
+            else if (col.key === 'candidate_summary') row[col.label] = stripMarkdown(a.candidate_summary || a.reasoning || '—');
+            else if (col.key === 'certification_match') row[col.label] = Array.isArray(a.certification_match) ? a.certification_match.join(', ') : '—';
+            else if (col.key === 'custom_prompt_matches') row[col.label] = Array.isArray(a.custom_prompt_matches) ? a.custom_prompt_matches.join(', ') : '—';
+            else if (col.key === 'missing_skills') row[col.label] = Array.isArray(a.missing_skills) ? a.missing_skills.join(', ') : '—';
+            else if (col.key === 'reasoning') row[col.label] = stripMarkdown(a.reasoning || '—');
+            else row[col.label] = '—';
+        });
+        return row;
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Screened Candidates");
+    const maxLen = {};
+    headers.forEach(h => { maxLen[h] = h.length; });
+    data.forEach(row => { Object.keys(row).forEach(key => { const val = String(row[key] || ''); maxLen[key] = Math.max(maxLen[key] || 0, val.length); }); });
+    worksheet["!cols"] = headers.map(h => h === 'Summary' ? { wch: 50 } : { wch: Math.min(Math.max(maxLen[h] + 3, 10), 60) });
+    XLSX.writeFile(workbook, `screened_candidates_${new Date().toISOString().slice(0, 10)}.xlsx`);
+};
+
+const ExportConfigModal = ({ isOpen, onClose, candidates, onExport }) => {
+    const [selectedCols, setSelectedCols] = useState(AVAILABLE_COLUMNS.slice(0, 7));
+    const [format, setFormat] = useState('excel');
+
+    const toggleColumn = (col) => {
+        setSelectedCols(prev =>
+            prev.some(c => c.key === col.key)
+                ? prev.filter(c => c.key !== col.key)
+                : [...prev, col]
+        );
+    };
+
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4" onClick={onClose}>
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50">
+                    <h3 className="font-bold text-gray-900 flex items-center gap-2 text-sm"><Download size={16} className="text-emerald-600" /> Export Configuration</h3>
+                    <button onClick={onClose} className="p-1 hover:bg-gray-150 rounded-lg text-slate-400"><X size={18} /></button>
+                </div>
+                <div className="p-5 space-y-5">
+                    <div>
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider mb-2">Export Format</p>
+                        <div className="flex gap-2">
+                            {[{ k: 'excel', label: 'Excel (.xlsx)', icon: FileSpreadsheet }, { k: 'pdf', label: 'PDF Report', icon: FileText }].map(f => (
+                                <button key={f.k} onClick={() => setFormat(f.k)} className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold border transition-all ${format === f.k ? 'border-emerald-500 bg-green-50/30 text-emerald-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                                    <f.icon size={14} /> {f.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="flex justify-between items-center mb-2">
+                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Select Columns</p>
+                            <div className="flex gap-2 text-[10px] font-black text-emerald-600">
+                                <button onClick={() => setSelectedCols(AVAILABLE_COLUMNS)} className="hover:underline">Select All</button>
+                                <span className="text-gray-300">|</span>
+                                <button onClick={() => setSelectedCols([])} className="hover:underline">Clear All</button>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1 no-scrollbar">
+                            {AVAILABLE_COLUMNS.map(col => {
+                                const selected = selectedCols.some(c => c.key === col.key);
+                                return (
+                                    <button key={col.key} onClick={() => toggleColumn(col)} className={`text-left px-3 py-2 rounded-xl text-xs font-bold border transition-all ${selected ? 'bg-green-50/40 border-emerald-500/25 text-emerald-700' : 'bg-gray-50/50 border-gray-100 text-gray-500 hover:bg-gray-100/50'}`}>
+                                        {col.label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+                <div className="px-5 py-4 border-t border-gray-100 bg-gray-50/50 flex justify-end gap-2">
+                    <button onClick={onClose} className="px-4 py-2 text-xs font-bold text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+                    <button
+                        onClick={() => onExport(format, selectedCols)}
+                        disabled={selectedCols.length === 0}
+                        className="px-5 py-2.5 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 disabled:opacity-50 transition-all shadow-sm"
+                    >
+                        Download Report
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ─── Pipeline Item Row ────────────────────────────────────────────────────────
+const PipelineItem = ({ name, status, score, error }) => {
+    let statusText = 'Pending';
+    let dotColor = 'bg-slate-300';
+    let icon = <Clock size={11} className="text-slate-400" />;
+
+    if (status === 'processing') {
+        statusText = 'AI Matching…';
+        dotColor = 'bg-amber-500 animate-ping';
+        icon = <Loader2 size={11} className="animate-spin text-amber-500" />;
+    } else if (status === 'completed') {
+        statusText = `Completed (${Math.round(score || 0)}%)`;
+        dotColor = 'bg-emerald-500';
+        icon = <CheckCircle size={11} className="text-emerald-500" />;
+    } else if (status === 'failed' || status === 'dead') {
+        statusText = 'Failed';
+        dotColor = 'bg-rose-500';
+        icon = <AlertCircle size={11} className="text-rose-500" />;
+    }
+
+    return (
+        <div className="flex items-center justify-between p-2.5 bg-white/70 border border-slate-100 rounded-xl text-xs gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                <span className="truncate font-semibold text-slate-700">{name}</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium shrink-0">
+                {icon}
+                <span className={status === 'failed' ? 'text-rose-500' : status === 'completed' ? 'text-emerald-600' : ''}>{statusText}</span>
+            </div>
+        </div>
+    );
+};
+
+// ─── Processing Progress ──────────────────────────────────────────────────────
+const ProcessingBanner = ({ completed, total, results }) => {
+    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return (
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
+            className="relative bg-gradient-to-r from-emerald-600 to-teal-600 rounded-3xl p-6 text-white overflow-hidden shadow-lg">
+            <div className="absolute inset-0 opacity-10"
+                style={{ backgroundImage: 'repeating-linear-gradient(45deg,#fff 0,#fff 1px,transparent 0,transparent 50%)', backgroundSize: '12px 12px' }} />
+            
+            <div className="relative flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center shadow-inner">
+                        <Loader2 size={24} className="animate-spin" />
+                    </div>
+                    <div>
+                        <p className="font-extrabold text-base tracking-tight">AI Assessment Workspace Running</p>
+                        <p className="text-xs text-emerald-100 font-medium mt-0.5">{completed} of {total} resumes processed</p>
+                    </div>
+                </div>
+                <div className="text-right shrink-0">
+                    <div className="text-3xl font-black">{pct}%</div>
+                    <div className="text-[10px] text-emerald-200 uppercase tracking-widest font-black">progress</div>
+                </div>
+            </div>
+            
+            <div className="relative mt-4 h-2 bg-white/20 rounded-full overflow-hidden">
+                <motion.div className="h-full bg-white rounded-full"
+                    initial={{ width: '0%' }} animate={{ width: `${pct}%` }} transition={{ duration: 0.5, ease: 'easeOut' }} />
+            </div>
+
+            {/* Pipeline list inside processing */}
+            <div className="relative mt-5 pt-4 border-t border-white/10 space-y-1.5 max-h-48 overflow-y-auto pr-1 no-scrollbar">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-200 mb-1">Queue Pipeline Ticker</p>
+                {results.map((r, i) => (
+                    <PipelineItem key={r.id} name={r.name} status={r.isPending ? (r.name === 'Scanning…' ? 'processing' : 'pending') : (r.status === 'Failed' ? 'failed' : 'completed')} score={r.score} error={r.reasoning} />
+                ))}
+            </div>
+        </motion.div>
+    );
+};
+
+// ─── Candidate Card ───────────────────────────────────────────────────────────
+const CandidateCard = ({ candidate, rank, onClick, onChat }) => {
+    const a = candidate.analysis || {};
+    const gems = [
+        ...(a.custom_prompt_matches || []),
+        ...(a.certification_match || [])
+    ];
+    const skills = a.key_skills_match || [];
+    const missing = a.missing_skills || [];
+    const score = candidate.score || 0;
+
+    const rankStyle = rank === 1
+        ? 'bg-gradient-to-br from-amber-400 to-yellow-500 text-white shadow-md ring-2 ring-amber-300'
+        : rank === 2
+            ? 'bg-gradient-to-br from-slate-300 to-slate-400 text-white shadow-sm ring-1 ring-slate-200'
+            : rank === 3
+                ? 'bg-gradient-to-br from-orange-400 to-orange-500 text-white shadow-sm ring-1 ring-orange-300'
+                : 'bg-slate-100 text-slate-500';
+
+    const hasCustomMatch = gems.length > 0;
+    const cardStyle = hasCustomMatch
+        ? "group bg-gradient-to-br from-white to-violet-50/20 rounded-2xl border border-violet-300 hover:border-violet-500 shadow-[0_0_12px_rgba(139,92,246,0.06)] hover:shadow-[0_0_18px_rgba(139,92,246,0.15)] transition-all duration-300 cursor-pointer overflow-hidden flex flex-col justify-between"
+        : "group bg-white rounded-2xl border border-slate-200 hover:border-emerald-500/40 hover:shadow-xl transition-all duration-300 cursor-pointer overflow-hidden flex flex-col justify-between";
+
+    return (
+        <motion.div layout initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
+            className={cardStyle}
+            onClick={onClick}>
+            {/* Top score strip */}
+            <div className={`h-1.5 w-full ${score >= 75 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : score >= 50 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-rose-400 to-rose-500'}`} />
+
+            <div className="p-5 flex-1 flex flex-col justify-between">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                    <div className="flex items-center gap-3">
+                        {/* Rank badge */}
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0 ${rankStyle}`}>
+                            #{rank}
+                        </div>
+                        {/* Info */}
+                        <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                <div className="font-extrabold text-slate-800 text-sm truncate group-hover:text-emerald-600 transition-colors">
+                                    {candidate.name || 'Unknown'}
+                                </div>
+                                {hasCustomMatch && (
+                                    <span className="inline-flex items-center gap-0.5 text-[8px] font-black px-1.5 py-0.5 rounded bg-violet-600 text-white shadow-sm shrink-0">
+                                        <Sparkles size={8} className="text-white" /> CUSTOM MATCH
+                                    </span>
+                                )}
+                            </div>
+                            <div className="text-xs text-slate-400 font-medium truncate mt-0.5">
+                                {(candidate.candidate?.email && !candidate.candidate.email.startsWith('no-email-')) ? candidate.candidate.email : '—'}
+                            </div>
+                        </div>
+                    </div>
+                    {/* Score ring */}
+                    <ScoreRing score={score} size={50} />
+                </div>
+
+                {/* Stats row */}
+                <div className="flex flex-wrap gap-1.5 mb-3 text-[10px] font-bold">
+                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-md">
+                        ✓ {skills.length} skills matched
+                    </span>
+                    {missing.length > 0 && (
+                        <span className="px-2 py-0.5 bg-slate-50 text-slate-500 rounded-md">
+                            ✗ {missing.length} gaps
+                        </span>
+                    )}
+                    {a.experience && (
+                        <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-md">
+                            {a.experience}
+                        </span>
+                    )}
+                </div>
+
+                {/* Gem badges */}
+                {gems.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-3">
+                        {gems.map((g, i) => <GemBadge key={i} label={g} />)}
+                    </div>
+                )}
+
+                {/* Skills preview */}
+                {skills.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-auto pt-2 border-t border-slate-100">
+                        {skills.slice(0, 3).map((s, i) => (
+                            <span key={i} className="text-[9px] font-bold px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-slate-600 uppercase">
+                                {s}
+                            </span>
+                        ))}
+                        {skills.length > 3 && (
+                            <span className="text-[9px] text-slate-400 font-bold self-center">+{skills.length - 3}</span>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* Footer actions */}
+            <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                <button
+                    onClick={e => { e.stopPropagation(); onChat(); }}
+                    className="text-[11px] font-bold text-slate-500 hover:text-emerald-600 flex items-center gap-1 transition-colors">
+                    <MessageSquare size={12} className="text-emerald-500" /> Ask Resume AI
+                </button>
+                <button onClick={onClick} className="text-[11px] font-bold text-emerald-600 flex items-center gap-1 hover:gap-1.5 transition-all">
+                    View Profile <ChevronRight size={12} />
+                </button>
+            </div>
+        </motion.div>
+    );
+};
+
+// ─── Dossier Drawer ────────────────────────────────────────────────────────────
+const DossierDrawer = ({ open, onClose, candidate, rank, onChat, onPromote, promoting, promoted }) => {
+    if (!candidate) return null;
+    const a = candidate.analysis || {};
+    const cs = a.component_scores || {};
+    const gems = a.custom_prompt_matches || [];
+    const skills = a.key_skills_match || [];
+    const missing = a.missing_skills || [];
+    const certs = a.certification_match || [];
+
+    return (
+        <AnimatePresence>
+            {open && (
+                <>
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50" onClick={onClose} />
+                    <motion.aside
+                        initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+                        transition={{ type: 'spring', damping: 30, stiffness: 250 }}
+                        className="fixed right-0 top-0 h-full w-full max-w-[520px] bg-white z-50 shadow-2xl flex flex-col border-l border-slate-100">
+
+                        {/* Header */}
+                        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
+                            <div>
+                                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Candidate Dossier · Rank #{rank}</div>
+                                <h2 className="text-lg font-black text-slate-900 mt-1">{candidate.name}</h2>
+                            </div>
+                            <button onClick={onClose} className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-slate-200 text-slate-400 transition-colors">
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        {/* Body */}
+                        <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth no-scrollbar">
+                            {/* Score overview */}
+                            <div className="flex items-center gap-5 bg-gradient-to-br from-slate-50 to-white rounded-2xl p-4 border border-slate-100 shadow-sm">
+                                <ScoreRing score={candidate.score || 0} size={76} />
+                                <div className="flex-1 space-y-1">
+                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Overall Match Fit</div>
+                                    <div className="text-sm font-black text-slate-800">
+                                        {(a.extracted_role && a.extracted_role.trim() !== '' && a.extracted_role.toLowerCase() !== 'n/a' && a.extracted_role.toLowerCase() !== 'none')
+                                            ? a.extracted_role
+                                            : (candidate.candidate?.role || 'N/A')}
+                                    </div>
+                                    <div className="text-xs text-slate-500 font-semibold">
+                                        Total Experience: <span className="font-bold text-slate-700">{a.experience || 'N/A'}</span>
+                                    </div>
+                                    {a.candidate_summary && (
+                                        <p className="text-xs text-slate-500 italic leading-relaxed mt-1.5">{a.candidate_summary}</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Gem badges */}
+                            {gems.length > 0 && (
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-black text-violet-600 uppercase tracking-wider flex items-center gap-1.5">
+                                        <Gem size={11} className="text-violet-500" /> Custom Criteria Matches
+                                    </div>
+                                    <div className="bg-violet-50/60 border border-violet-100 rounded-xl p-3.5 flex flex-wrap gap-2">
+                                        {gems.map((g, i) => (
+                                            <span key={i} className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 bg-white text-violet-700 border border-violet-200 rounded-xl shadow-sm">
+                                                <Gem size={11} className="text-violet-500 animate-spin-slow" /> {g}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Score breakdown */}
+                            <div className="space-y-3">
+                                <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                                    <BarChart2 size={11} className="text-emerald-500" /> Scoring Metrics Breakdown
+                                </div>
+                                <div className="bg-white rounded-xl border border-slate-100 p-4 space-y-3.5 shadow-sm">
+                                    <ScoreBar label="Skills Match" value={cs.skills || 0} max={40} color="#10b981" />
+                                    <ScoreBar label="Experience Depth" value={cs.experience || 0} max={25} color="#16a34a" />
+                                    <ScoreBar label="Projects Complexity" value={cs.projects || 0} max={20} color="#0d9488" />
+                                    <ScoreBar label="Education/Certs" value={cs.education || 0} max={10} color="#0891b2" />
+                                    <ScoreBar label="Preferred / Bonus Skills" value={cs.bonus || 0} max={5} color="#7c3aed" />
+                                </div>
+                            </div>
+
+                            {/* AI Reasoning */}
+                            {candidate.reasoning && (
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                                        <Sparkles size={11} className="text-emerald-500" /> AI Interview Fit Summary
+                                    </div>
+                                    <div className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-4 text-xs text-slate-700 leading-relaxed font-medium">
+                                        {candidate.reasoning}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Strengths / Gaps */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-black text-emerald-700 uppercase tracking-wide">✓ Core Strengths</div>
+                                    <div className="flex flex-wrap gap-1.5 bg-slate-50 rounded-xl p-3 border border-slate-100 min-h-[70px]">
+                                        {skills.map((s, i) => (
+                                            <span key={i} className="text-[10px] px-2 py-0.5 bg-white text-emerald-700 border border-emerald-100 rounded-md font-bold uppercase">{s}</span>
+                                        ))}
+                                        {!skills.length && <span className="text-[10px] text-slate-300 italic">No skills listed</span>}
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-black text-rose-700 uppercase tracking-wide">✗ Identified Gaps</div>
+                                    <div className="flex flex-wrap gap-1.5 bg-slate-50 rounded-xl p-3 border border-slate-100 min-h-[70px]">
+                                        {missing.map((s, i) => (
+                                            <span key={i} className="text-[10px] px-2 py-0.5 bg-white text-rose-600 border border-rose-100 rounded-md font-bold uppercase">{s}</span>
+                                        ))}
+                                        {!missing.length && <span className="text-[10px] text-slate-300 italic">No missing skills</span>}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Certs */}
+                            {certs.length > 0 && (
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Certifications Found</div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {certs.map((c, i) => (
+                                            <span key={i} className="text-[11px] px-2.5 py-1 bg-blue-50/50 text-blue-700 border border-blue-100 rounded-lg font-semibold flex items-center gap-1">
+                                                <CheckCircle size={10} className="text-blue-500" /> {c}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Footer */}
+                        <div className="p-4 border-t border-slate-100 bg-slate-50/80 flex gap-3">
+                            <button onClick={onChat}
+                                className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-100 transition-all">
+                                <Brain size={14} className="text-emerald-500 animate-pulse" /> Chat with Resume
+                            </button>
+                            <button onClick={onPromote} disabled={promoting || promoted}
+                                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold text-white rounded-xl transition-all ${promoted ? 'bg-emerald-600' : promoting ? 'bg-slate-400' : 'bg-emerald-600 hover:bg-emerald-700 shadow-sm'}`}>
+                                {promoting ? <Loader2 size={13} className="animate-spin" /> : promoted ? '✓ Candidate Promoted' : 'Promote to Next Stage'}
+                            </button>
+                        </div>
+                    </motion.aside>
+                </>
+            )}
+        </AnimatePresence>
+    );
+};
+
+// ─── Local Upload Modal ─────────────────────────────────────────────────────
 const LocalUploadModal = ({ isOpen, onClose, onUpload }) => {
     const [tempFiles, setTempFiles] = useState([]);
-    const browseInputRef = useRef(null);
+    const browseRef = useRef(null);
 
     const addFiles = useCallback((incoming) => {
-        const allowedExtensions = ['.pdf', '.doc', '.docx'];
-        const filtered = incoming.filter(file => {
-            const name = file.name || '';
-            const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
-            return allowedExtensions.includes(ext);
+        const allowed = ['.pdf', '.doc', '.docx'];
+        const filtered = incoming.filter(f => {
+            const ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
+            return allowed.includes(ext);
         });
         setTempFiles(prev => {
             const existing = new Set(prev.map(f => f.name));
@@ -1050,153 +664,83 @@ const LocalUploadModal = ({ isOpen, onClose, onUpload }) => {
         const files = [];
         const isDrop = event.type === 'drop';
         const items = isDrop ? event.dataTransfer.items : event.target.files;
-
         if (isDrop && items) {
             const scan = async (entry) => {
                 if (entry.isFile) {
-                    const file = await new Promise((resolve) => entry.file(resolve));
+                    const file = await new Promise(r => entry.file(r));
                     files.push(file);
                 } else if (entry.isDirectory) {
                     const reader = entry.createReader();
-                    const readEntries = () => new Promise((resolve) => reader.readEntries(resolve));
+                    const readEntries = () => new Promise(r => reader.readEntries(r));
                     let entries = await readEntries();
                     while (entries.length > 0) {
-                        for (const child of entries) {
-                            await scan(child);
-                        }
+                        for (const c of entries) await scan(c);
                         entries = await readEntries();
                     }
                 }
             };
-
             for (const item of items) {
-                const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-                if (entry) {
-                    await scan(entry);
-                } else {
-                    const file = item.getAsFile ? item.getAsFile() : null;
-                    if (file) files.push(file);
-                }
+                const entry = item.webkitGetAsEntry?.();
+                if (entry) await scan(entry);
+                else { const file = item.getAsFile?.(); if (file) files.push(file); }
             }
         } else if (items) {
-            for (let i = 0; i < items.length; i++) {
-                files.push(items[i]);
-            }
+            for (let i = 0; i < items.length; i++) files.push(items[i]);
         }
         return files;
     };
 
-    const { getRootProps, getInputProps, isDragActive } = useDropzone({
-        onDrop: addFiles,
-        getFilesFromEvent,
-        noClick: true,
-    });
-
-    const handleBrowseChange = (e) => {
-        const selected = Array.from(e.target.files || []);
-        addFiles(selected);
-        e.target.value = '';
-    };
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop: addFiles, getFilesFromEvent, noClick: true });
 
     if (!isOpen) return null;
-
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                className="bg-white rounded-2xl border border-gray-200 shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]"
-            >
-                {/* Modal Header */}
-                <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <div>
-                        <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2">
-                            <Upload size={18} className="text-[#5d8c2c]" />
-                            Folder Upload
-                        </h3>
-                        <p className="text-xs text-gray-500 mt-1 font-medium">Drag a folder into the area below, or browse individual files</p>
-                    </div>
-                    <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
-                        <X size={20} />
-                    </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
+                <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <FolderOpen size={16} className="text-emerald-500" /> Upload from Local Directory
+                    </h3>
+                    <button onClick={onClose} className="p-1.5 hover:bg-slate-150 rounded-lg text-slate-400"><X size={16} /></button>
                 </div>
-
-                {/* Modal Content */}
-                <div className="p-6 flex-1 overflow-y-auto space-y-4">
-                    {/* Hidden browse-files input (no webkitdirectory — avoids browser security dialog) */}
-                    <input
-                        ref={browseInputRef}
-                        type="file"
-                        multiple
-                        accept=".pdf,.doc,.docx"
-                        onChange={handleBrowseChange}
-                        className="hidden"
-                    />
-
-                    <div
-                        {...getRootProps()}
-                        className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-all duration-300 ${isDragActive ? 'border-[#5d8c2c] bg-green-50/55 scale-[1.01]' : 'border-gray-300'}`}
-                    >
+                <div className="p-4 flex-1 overflow-y-auto space-y-3">
+                    <input ref={browseRef} type="file" multiple accept=".pdf,.doc,.docx"
+                        onChange={e => { addFiles(Array.from(e.target.files || [])); e.target.value = ''; }} className="hidden" />
+                    <div {...getRootProps()}
+                        className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center text-center transition-all ${isDragActive ? 'border-emerald-500 bg-green-50/30' : 'border-slate-200 hover:border-emerald-500/40'}`}>
                         <input {...getInputProps()} />
-                        <div className="w-12 h-12 bg-green-50 text-[#5d8c2c] rounded-xl flex items-center justify-center mb-3">
-                            <FolderOpen size={24} />
-                        </div>
-                        <p className="text-sm font-bold text-gray-800">
-                            {isDragActive ? 'Drop folder here…' : 'Drag & drop a folder here'}
-                        </p>
-                        <p className="text-xs text-gray-400 mt-1 mb-4">All PDF, DOC, DOCX files inside will be added</p>
-                        <div className="flex items-center gap-3 w-full max-w-xs">
-                            <div className="flex-1 h-px bg-gray-200" />
-                            <span className="text-xs text-gray-400 font-medium">or</span>
-                            <div className="flex-1 h-px bg-gray-200" />
-                        </div>
-                        <button
-                            onClick={() => browseInputRef.current?.click()}
-                            className="mt-4 text-xs font-semibold text-[#5d8c2c] border border-[#5d8c2c]/40 px-4 py-2 rounded-lg hover:bg-green-50 transition-colors"
-                        >
-                            Browse Individual Files
+                        <FolderOpen size={28} className="text-emerald-500 mb-2" />
+                        <p className="text-sm font-bold text-slate-700">{isDragActive ? 'Drop here…' : 'Drag & drop folder'}</p>
+                        <p className="text-xs text-slate-400 mt-0.5 mb-3">Supports PDF and DOCX files</p>
+                        <button onClick={() => browseRef.current?.click()}
+                            className="text-xs font-bold text-emerald-600 border border-emerald-500/20 px-4 py-1.5 rounded-lg hover:bg-green-50">
+                            Browse Files
                         </button>
                     </div>
-
                     {tempFiles.length > 0 && (
-                        <div className="space-y-2">
-                            <div className="flex justify-between text-xs text-gray-500 font-bold">
+                        <div className="space-y-1">
+                            <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
                                 <span>{tempFiles.length} files selected</span>
-                                <button onClick={() => setTempFiles([])} className="text-red-500 hover:underline">Clear All</button>
+                                <button onClick={() => setTempFiles([])} className="text-rose-500">Clear all</button>
                             </div>
-                            <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1 border border-gray-100 rounded-lg p-2 bg-gray-50/50">
-                                {tempFiles.map((file, idx) => (
-                                    <div key={idx} className="flex items-center justify-between p-2 bg-white rounded-lg text-xs border border-gray-200">
-                                        <div className="flex items-center gap-2 overflow-hidden">
-                                            <FileText size={14} className="text-green-600 shrink-0" />
-                                            <span className="truncate font-medium text-gray-700">{file.name}</span>
-                                        </div>
-                                        <button onClick={() => setTempFiles(tempFiles.filter(f => f !== file))} className="text-gray-400 hover:text-red-500 p-0.5">
-                                            <X size={14} />
-                                        </button>
+                            <div className="max-h-32 overflow-y-auto space-y-1">
+                                {tempFiles.map((f, i) => (
+                                    <div key={i} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg text-xs border border-slate-100">
+                                        <span className="truncate max-w-[280px] font-semibold text-slate-700">{f.name}</span>
+                                        <button onClick={() => setTempFiles(p => p.filter((_, j) => j !== i))}
+                                            className="text-slate-300 hover:text-rose-500 ml-2"><X size={11} /></button>
                                     </div>
                                 ))}
                             </div>
                         </div>
                     )}
                 </div>
-
-                {/* Modal Footer */}
-                <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
-                    <button onClick={onClose} className="px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-                        Cancel
-                    </button>
-                    <button
-                        onClick={() => {
-                            onUpload(tempFiles);
-                            setTempFiles([]);
-                            onClose();
-                        }}
-                        disabled={tempFiles.length === 0}
-                        className={`px-5 py-2 text-sm font-semibold rounded-lg text-white transition-all ${tempFiles.length === 0 ? 'bg-gray-300 cursor-not-allowed' : 'bg-[#5d8c2c] hover:bg-[#4c7524]'}`}
-                    >
-                        Upload Selected
+                <div className="p-3 border-t border-slate-100 flex justify-end gap-2">
+                    <button onClick={onClose} className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700">Cancel</button>
+                    <button onClick={() => { onUpload(tempFiles); setTempFiles([]); onClose(); }}
+                        disabled={!tempFiles.length}
+                        className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl disabled:opacity-40 transition-all">
+                        Add to Queue
                     </button>
                 </div>
             </motion.div>
@@ -1204,43 +748,1190 @@ const LocalUploadModal = ({ isOpen, onClose, onUpload }) => {
     );
 };
 
-const OneDriveModal = ({ isOpen, onClose }) => {
-    if (!isOpen) return null;
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+const ResumeScreening = () => {
+    const navigate = useNavigate();
+
+    // ── Persisted state ─────────────────────────────────────────────────────
+    const [jd, setJd] = useState(() => sessionStorage.getItem('rs_jd') || '');
+    const [batchLabel, setBatchLabel] = useState(() => sessionStorage.getItem('rs_batchLabel') || '');
+    const [keywords, setKeywords] = useState(() => { try { return JSON.parse(sessionStorage.getItem('rs_kw')) || []; } catch { return []; } });
+    const [customPrompt, setCustomPrompt] = useState(() => sessionStorage.getItem('rs_cp') || '');
+    const [shortlist, setShortlist] = useState(() => Number(sessionStorage.getItem('rs_n')) || 5);
+    const [results, setResults] = useState(() => { try { return JSON.parse(sessionStorage.getItem('rs_results')) || []; } catch { return []; } });
+
+    // ── UI state ─────────────────────────────────────────────────────────────
+    const [files, setFiles] = useState([]);
+    const [kwInput, setKwInput] = useState('');
+    const [tab, setTab] = useState('workspace');
+    const [batches, setBatches] = useState([]);
+    const [loadingBatches, setLoadingBatches] = useState(false);
+    const [activeBatch, setActiveBatch] = useState(null);
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [drawerCandidate, setDrawerCandidate] = useState(null);
+    const [screening, setScreening] = useState(false);
+    const [batchCompleted, setBatchCompleted] = useState(0);
+    const [batchTotal, setBatchTotal] = useState(0);
+    const [usage, setUsage] = useState({ used: 0, limit: 15 });
+    const [promoting, setPromoting] = useState(false);
+    const [promoted, setPromoted] = useState(false);
+    const [showReset, setShowReset] = useState(false);
+    const [showLocalModal, setShowLocalModal] = useState(false);
+    const [showFolderMenu, setShowFolderMenu] = useState(false);
+    const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'table'
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [candidateSearch, setCandidateSearch] = useState('');
+    const [showPremiumModal, setShowPremiumModal] = useState(false);
+
+    // ── OneDrive state ────────────────────────────────────────────────────────
+    const [oneDriveConnected, setOneDriveConnected] = useState(false);
+    const [showOneDriveModal, setShowOneDriveModal] = useState(false);
+    const [oneDriveFolders, setOneDriveFolders] = useState([]);
+    const [oneDriveFoldersLoading, setOneDriveFoldersLoading] = useState(false);
+    const [oneDriveFiles, setOneDriveFiles] = useState([]);
+    const [oneDriveFilesLoading, setOneDriveFilesLoading] = useState(false);
+    const [selectedOneDriveFolder, setSelectedOneDriveFolder] = useState(null);
+
+    const jdFileRef = useRef(null);
+    const pollRef = useRef(null);
+
+    const PRESETS = ['Python', 'JavaScript', 'React', 'Node.js', 'SQL', 'Docker', 'AWS', 'FastAPI', 'Machine Learning'];
+
+    // ── Session sync ─────────────────────────────────────────────────────────
+    useEffect(() => { sessionStorage.setItem('rs_jd', jd); }, [jd]);
+    useEffect(() => { sessionStorage.setItem('rs_batchLabel', batchLabel); }, [batchLabel]);
+    useEffect(() => { sessionStorage.setItem('rs_kw', JSON.stringify(keywords)); }, [keywords]);
+    useEffect(() => { sessionStorage.setItem('rs_cp', customPrompt); }, [customPrompt]);
+    useEffect(() => { sessionStorage.setItem('rs_n', String(shortlist)); }, [shortlist]);
+    useEffect(() => { if (results.length) sessionStorage.setItem('rs_results', JSON.stringify(results)); else sessionStorage.removeItem('rs_results'); }, [results]);
+    useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+    // ── Fetch usage stats ──────────────────────────────────────────────────────
+    const fetchUsageStats = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(`${API_URL}/api/resume/usage-stats/`, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {}
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setUsage(data);
+            }
+        } catch (e) {
+            console.error('Error fetching usage stats:', e);
+        }
+    };
+
+    // ── Fetch batches ─────────────────────────────────────────────────────────
+    const fetchBatches = async () => {
+        setLoadingBatches(true);
+        try {
+            const token = localStorage.getItem('token');
+            const r = await fetch(`${API_URL}/api/resume/batches/`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+            if (r.ok) setBatches(await r.json());
+        } catch (e) { console.error(e); }
+        setLoadingBatches(false);
+    };
+
+    useEffect(() => { if (tab === 'history') fetchBatches(); }, [tab]);
+
+    // ── OneDrive helpers ──────────────────────────────────────────────────────
+    const _odEmail = () => localStorage.getItem('email') || '';
+
+    const checkOneDriveAuth = async () => {
+        const email = _odEmail();
+        if (!email) return;
+        try {
+            const r = await fetch(`${API_URL}/check_onedrive_authenticated?email=${encodeURIComponent(email)}`);
+            const d = await r.json();
+            setOneDriveConnected(d.connected === true);
+        } catch { /* ignore */ }
+    };
+
+    useEffect(() => { checkOneDriveAuth(); fetchUsageStats(); }, []);
+
+    const handleOneDriveConnect = () => {
+        const email = _odEmail();
+        const popup = window.open(
+            `${API_URL}/onedrive/connect?email=${encodeURIComponent(email)}`,
+            'OneDriveAuth',
+            'width=860,height=640,left=200,top=100'
+        );
+        const listener = (e) => {
+            if (e.data === 'onedrive_auth_success') {
+                window.removeEventListener('message', listener);
+                popup?.close();
+                setOneDriveConnected(true);
+                loadOneDriveFolders();
+                setShowOneDriveModal(true);
+            } else if (e.data === 'onedrive_auth_failed') {
+                window.removeEventListener('message', listener);
+                popup?.close();
+            }
+        };
+        window.addEventListener('message', listener);
+    };
+
+    const loadOneDriveFolders = async () => {
+        const email = _odEmail();
+        if (!email) return;
+        setOneDriveFoldersLoading(true);
+        try {
+            const r = await fetch(`${API_URL}/folders?email=${encodeURIComponent(email)}`);
+            const d = await r.json();
+            setOneDriveFolders(d.folders || []);
+        } catch { setOneDriveFolders([]); }
+        setOneDriveFoldersLoading(false);
+    };
+
+    const handleFolderSelect = async (folder) => {
+        setSelectedOneDriveFolder(folder);
+        setOneDriveFiles([]);
+        setOneDriveFilesLoading(true);
+        try {
+            const email = _odEmail();
+            const r = await fetch(`${API_URL}/onedrive-folder-files?email=${encodeURIComponent(email)}&folder_id=${folder.id}`);
+            const d = await r.json();
+            setOneDriveFiles(d.files || []);
+        } catch { setOneDriveFiles([]); }
+        setOneDriveFilesLoading(false);
+    };
+
+    const handleOneDriveClick = () => {
+        setShowFolderMenu(false);
+        setShowOneDriveModal(true);
+        if (oneDriveConnected && oneDriveFolders.length === 0) {
+            loadOneDriveFolders();
+        }
+    };
+
+    // ── Load past batch ────────────────────────────────────────────────────────
+    const loadBatch = async (batchId) => {
+        try {
+            const token = localStorage.getItem('token');
+            const r = await fetch(`${API_URL}/api/resume/screen/batch/${batchId}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+            if (!r.ok) return;
+            const data = await r.json();
+            const mapped = (data.results || [])
+                .filter(x => x.status === 'completed' && x.candidate)
+                .map((x, i) => ({
+                    id: `b-${batchId}-${i}`,
+                    name: x.candidate?.name || x.filename,
+                    score: x.candidate?.score || x.analysis?.score || 0,
+                    status: 'Screened',
+                    analysis: x.analysis || {},
+                    reasoning: x.analysis?.reasoning || '',
+                    candidate: x.candidate,
+                }));
+            const failed = (data.results || [])
+                .filter(x => x.status === 'failed' || x.status === 'dead')
+                .map((x, i) => ({
+                    id: `bf-${batchId}-${i}`,
+                    name: x.filename,
+                    score: 0,
+                    status: 'Failed',
+                    analysis: {},
+                    reasoning: x.error || 'Processing failed',
+                    candidate: null,
+                    error: x.error,
+                }));
+            setResults([...mapped.sort((a, b) => b.score - a.score), ...failed]);
+            setActiveBatch(batchId);
+            setTab('workspace');
+        } catch (e) { console.error(e); }
+    };
+
+    const deleteBatch = async (batchId, e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this batch permanently?')) return;
+        const token = localStorage.getItem('token');
+        const r = await fetch(`${API_URL}/api/resume/batches/${batchId}/`, { method: 'DELETE', headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        if (r.ok) { if (activeBatch === batchId) resetAll(); fetchBatches(); fetchUsageStats(); }
+    };
+
+    // ── Map poll results ──────────────────────────────────────────────────────
+    const mapResults = (data, includesPending = true) => {
+        const done = (data.results || []).filter(x => x.status === 'completed' && x.candidate)
+            .map((x, i) => ({ id: `r-${x.job_id || i}`, name: x.candidate?.name || x.filename, score: x.analysis?.score != null ? x.analysis.score : (x.candidate?.score || 0), status: 'Screened', analysis: x.analysis || {}, reasoning: x.analysis?.reasoning || '', candidate: x.candidate, isPending: false }));
+        const failed = (data.results || []).filter(x => x.status === 'failed' || x.status === 'dead')
+            .map((x, i) => ({ id: `f-${x.job_id || i}`, name: x.filename, score: 0, status: 'Failed', analysis: {}, reasoning: x.error || '', candidate: null, isPending: false }));
+        const pending = includesPending ? (data.results || []).filter(x => x.status === 'pending' || x.status === 'processing')
+            .map((x, i) => ({ id: `p-${x.job_id || i}`, name: x.filename || 'Scanning…', score: 0, status: 'Pending', analysis: {}, reasoning: '', candidate: null, isPending: true })) : [];
+        return [...done.sort((a, b) => b.score - a.score), ...failed, ...pending];
+    };
+
+    // ── Resilient Polling Setup ───────────────────────────────────────────────
+    const resumeScreeningPoll = useCallback((batchId) => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        setScreening(true);
+        setActiveBatch(batchId);
+
+        const token = localStorage.getItem('token');
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+        const poll = async () => {
+            try {
+                const pr = await fetch(`${API_URL}/api/resume/screen/batch/${batchId}`, { headers });
+                if (!pr.ok) {
+                    clearInterval(pollRef.current);
+                    setScreening(false);
+                    localStorage.removeItem('active_screening_batch_id');
+                    return;
+                }
+                const pd = await pr.json();
+                setBatchCompleted(pd.completed || 0);
+                setBatchTotal(pd.total || 0);
+                setResults(mapResults(pd, true));
+
+                if (pd.status === 'completed') {
+                    clearInterval(pollRef.current);
+                    setResults(mapResults(pd, false));
+                    setScreening(false);
+                    localStorage.removeItem('active_screening_batch_id');
+                    fetchUsageStats();
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        };
+
+        poll();
+        pollRef.current = setInterval(poll, 2500);
+    }, []);
+
+    // Load active screening from local storage on mount
+    useEffect(() => {
+        const activeBatchId = localStorage.getItem('active_screening_batch_id');
+        if (activeBatchId) {
+            resumeScreeningPoll(activeBatchId);
+        }
+    }, [resumeScreeningPoll]);
+
+    // ── Reset ─────────────────────────────────────────────────────────────────
+    const resetAll = () => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        setJd(''); setBatchLabel(''); setFiles([]); setKeywords([]); setCustomPrompt('');
+        setResults([]); setActiveBatch(null); setScreening(false); setBatchCompleted(0); setBatchTotal(0);
+        setPromoted(false); setShowReset(false);
+        localStorage.removeItem('active_screening_batch_id');
+        ['rs_jd', 'rs_batchLabel', 'rs_kw', 'rs_cp', 'rs_n', 'rs_results'].forEach(k => sessionStorage.removeItem(k));
+    };
+
+    // ── Keyword helpers ────────────────────────────────────────────────────────
+    const addKw = () => { const c = kwInput.trim().toLowerCase(); if (c && !keywords.includes(c)) setKeywords(p => [...p, c]); setKwInput(''); };
+    const removeKw = (k) => setKeywords(p => p.filter(x => x !== k));
+    const togglePreset = (s) => { const l = s.toLowerCase(); if (keywords.includes(l)) removeKw(l); else setKeywords(p => [...p, l]); };
+
+    // ── Drop zone ─────────────────────────────────────────────────────────────
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({
+        onDrop: f => setFiles(p => [...p, ...f]),
+        accept: { 'application/pdf': ['.pdf'], 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] }
+    });
+
+    // ── JD file import ────────────────────────────────────────────────────────
+    const handleJDFile = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.type === 'text/plain') {
+            const reader = new FileReader();
+            reader.onload = ev => setJd(ev.target.result);
+            reader.readAsText(file);
+        }
+        e.target.value = '';
+    };
+
+    // ── Start screening ────────────────────────────────────────────────────────
+    const startScreening = async () => {
+        if (!isValid || screening) return;
+        if (pollRef.current) clearInterval(pollRef.current);
+        setScreening(true); setResults([]); setBatchCompleted(0);
+        setBatchTotal(selectedOneDriveFolder ? 0 : files.length);
+        setPromoted(false); setActiveBatch(null);
+
+        const form = new FormData();
+        form.append('job_description', jd);
+        form.append('top_n', shortlist);
+        if (batchLabel.trim()) form.append('batch_name', batchLabel.trim());
+        if (keywords.length) form.append('keywords', keywords.join(', '));
+        if (customPrompt.trim()) form.append('custom_prompt', customPrompt.trim());
+
+        let endpoint = `${API_URL}/api/resume/screen/`;
+        if (selectedOneDriveFolder) {
+            endpoint = `${API_URL}/api/resume/screen-onedrive/`;
+            form.append('email', _odEmail());
+            form.append('folder_id', selectedOneDriveFolder.id);
+        } else {
+            files.forEach(f => form.append('files', f));
+        }
+
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch(endpoint, {
+                method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form
+            });
+            if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+            const data = await res.json();
+            const batch_id = data.batch_id;
+            setBatchTotal(data.job_count || 0);
+            localStorage.setItem('active_screening_batch_id', batch_id);
+            resumeScreeningPoll(batch_id);
+            fetchUsageStats();
+        } catch (e) {
+            console.error(e);
+            alert(e.message || "Failed to start screening.");
+            setScreening(false);
+        }
+    };
+
+    // ── Promote ────────────────────────────────────────────────────────────────
+    const promoteAll = async () => {
+        setShowPremiumModal(true);
+    };
+
+    const promoteSingle = async (candidateId) => {
+        setShowPremiumModal(true);
+    };
+
+    const deepLinkChat = (candidate) => {
+        // Stash search state so sidebar in Chat resolves correctly
+        const state = { query: `Tell me about ${candidate.name} — their skills, experience, and score`, candidateName: candidate.name };
+        sessionStorage.setItem('chat_deep_link', JSON.stringify(state));
+        navigate('/resume-chat', { state });
+    };
+
+    // ── Computed ──────────────────────────────────────────────────────────────
+    const screened = results.filter(r => r.status === 'Screened');
+    const failed = results.filter(r => r.status === 'Failed');
+    const pending = results.filter(r => r.isPending);
+    const topScore = screened.length ? Math.max(...screened.map(r => r.score)) : 0;
+    const avgScore = screened.length ? Math.round(screened.reduce((s, r) => s + r.score, 0) / screened.length) : 0;
+    const hasSource = files.length > 0 || selectedOneDriveFolder != null;
+    const isValid = hasSource && jd.trim() && shortlist > 0;
+
+    const filteredScreened = screened.filter(c =>
+        (c.name || '').toLowerCase().includes(candidateSearch.toLowerCase()) ||
+        (c.candidate?.email || '').toLowerCase().includes(candidateSearch.toLowerCase())
+    );
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div 
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                className="bg-white rounded-2xl border border-gray-200 shadow-2xl w-full max-w-sm overflow-hidden flex flex-col"
-            >
-                <div className="p-5 border-b border-gray-100 flex justify-between items-center">
-                    <h3 className="font-bold text-gray-900 text-base flex items-center gap-2">
-                        <Cloud size={18} className="text-blue-500" />
-                        OneDrive Upload
-                    </h3>
-                    <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
-                        <X size={20} />
-                    </button>
-                </div>
-                <div className="p-6 text-center space-y-4">
-                    <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mx-auto">
-                        <Cloud size={32} />
+        <div className="w-full min-h-screen pb-12">
+
+            {/* ── Page Header ── */}
+            <div className="mb-8 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-600 shrink-0">
+                        <Layers size={24} />
                     </div>
                     <div>
-                        <h4 className="font-bold text-gray-900 text-sm">OneDrive integration coming soon</h4>
-                        <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-                            We are currently implementing the secure Microsoft API connection. Please use Local Storage upload for now.
-                        </p>
+                        <h1 className="text-3xl font-black text-slate-800 tracking-tight leading-none">AI Resume Screening</h1>
+                        <p className="text-sm font-semibold text-slate-400 mt-2">Filter requirements, batch process resumes, and let Gemini evaluate applicant quality.</p>
                     </div>
                 </div>
-                <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-center">
-                    <button onClick={onClose} className="px-6 py-2 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors">
-                        Okay
-                    </button>
+                
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 shrink-0 w-full lg:w-auto">
+                    {/* Processing Limit Progress Widget */}
+                    <div className="flex flex-col gap-1.5 px-4 py-2.5 border border-slate-200 rounded-2xl bg-slate-50/50 min-w-[150px] sm:min-w-[180px]">
+                        <div className="flex items-center justify-between text-[10px] font-bold">
+                            <span className="text-slate-500 uppercase tracking-wider">Usage</span>
+                            <span className={usage.used >= usage.limit ? "text-rose-600 font-black" : "text-amber-600 font-black"}>
+                                {usage.used} / {usage.limit}
+                            </span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                            <div 
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                    usage.used >= usage.limit ? 'bg-rose-500' : 'bg-amber-500'
+                                }`} 
+                                style={{ width: `${Math.min(100, (usage.used / usage.limit) * 100)}%` }} 
+                            />
+                        </div>
+                        <div className="text-[9px] font-semibold text-slate-400 leading-none">
+                            {usage.used >= usage.limit ? (
+                                <span>Limit reached. <a href="https://thirdeyedata.ai/contact-us/" target="_blank" rel="noopener noreferrer" className="underline font-bold text-rose-500 hover:text-rose-600">Contact ThirdEye</a></span>
+                            ) : (
+                                <span>Need more? <a href="https://thirdeyedata.ai/contact-us/" target="_blank" rel="noopener noreferrer" className="underline font-bold text-amber-500 hover:text-amber-600">Contact ThirdEye</a></span>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 shrink-0 self-end lg:self-center">
+                        {screened.length > 0 && (
+                            <button onClick={promoteAll} disabled={promoting || promoted}
+                                className={`px-5 py-2.5 text-xs font-bold text-white rounded-xl transition-all shadow-md ${promoted ? 'bg-emerald-600' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
+                                {promoting ? <Loader2 size={13} className="animate-spin inline mr-1" /> : promoted ? '✓ Shortlist Promoted' : 'Promote Shortlist'}
+                            </button>
+                        )}
+                        <button onClick={() => setShowReset(true)}
+                            className="px-5 py-2.5 text-xs font-bold text-rose-600 border border-rose-200 rounded-xl hover:bg-rose-50 transition-all">
+                            Reset Workspace
+                        </button>
+                    </div>
                 </div>
-            </motion.div>
+            </div>
+
+            {/* ── Main Layout Split ── */}
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start w-full">
+
+                {/* LEFT WORKSPACE SETUP PANEL */}
+                <div className="xl:col-span-4 flex flex-col gap-6 w-full">
+
+                    {/* Step 1: Criteria */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden transition-all duration-300 hover:border-slate-300">
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center shadow-inner">
+                                    <FileText size={14} />
+                                </div>
+                                <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">1 · Job Requirements</span>
+                            </div>
+                            <button onClick={() => jdFileRef.current?.click()}
+                                className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200/50 hover:bg-emerald-100/60 px-2.5 py-1.5 rounded-lg transition-all shadow-sm">
+                                Import Text File
+                            </button>
+                            <input ref={jdFileRef} type="file" accept=".txt" onChange={handleJDFile} className="hidden" />
+                        </div>
+                        <div className="p-5 space-y-3">
+                            <textarea value={jd} onChange={e => setJd(e.target.value)}
+                                placeholder="Paste Job Description, roles, or requirements here…"
+                                rows={6}
+                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-medium placeholder:text-slate-300 resize-none transition-all leading-relaxed" />
+                        </div>
+                    </div>
+
+                    {/* Step 2: Custom AI Prompt */}
+                    <div className="bg-white rounded-3xl border border-violet-200 shadow-sm overflow-hidden transition-all duration-300 hover:border-violet-300">
+                        <div className="px-5 py-4 border-b border-violet-100 flex items-center justify-between bg-violet-50/30">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 bg-violet-100 text-violet-600 rounded-lg flex items-center justify-center shadow-inner">
+                                    <Wand2 size={14} />
+                                </div>
+                                <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">2 · Custom Guidelines</span>
+                            </div>
+                            {customPrompt.trim() && (
+                                <span className="text-[9px] font-black text-violet-600 bg-violet-100 px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm animate-pulse-subtle">Active</span>
+                            )}
+                        </div>
+                        <div className="p-5 space-y-3.5">
+                            <p className="text-[11px] text-slate-400 font-semibold leading-relaxed">
+                                Highlight unique needs (e.g. AWS Certification, Bilingual, Leadership). Matched requirements generate premium <span className="text-violet-600 font-bold">gem badges</span> in leaderboard.
+                            </p>
+                            <textarea value={customPrompt} onChange={e => setCustomPrompt(e.target.value)}
+                                placeholder={"e.g. Must have led a team of 5+ engineers\nMust have AWS Cloud Practitioner certification\nMust have worked in early-stage startups"}
+                                rows={4}
+                                className="w-full px-4 py-3 bg-violet-50/20 border border-violet-200 rounded-2xl text-xs focus:outline-none focus:ring-2 focus:ring-violet-300/30 resize-none placeholder:text-slate-350 font-semibold transition-all leading-relaxed text-violet-950" />
+                        </div>
+                    </div>
+
+                    {/* Step 3: Match Parameters */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden transition-all duration-300 hover:border-slate-300">
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center shadow-inner">
+                                    <Sliders size={14} />
+                                </div>
+                                <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">3 · Matching Parameters</span>
+                            </div>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            {/* Shortlist count */}
+                            <div className="space-y-2">
+                                <div className="flex justify-between items-center">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Shortlist Target Capacity</label>
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={() => setShortlist(s => Math.max(1, s - 1))}
+                                            className="w-6 h-6 flex items-center justify-center bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
+                                            <Minus size={11} />
+                                        </button>
+                                        <span className="text-xs font-black text-emerald-600 w-8 text-center">{shortlist}</span>
+                                        <button onClick={() => setShortlist(s => Math.min(files.length || 99, s + 1))}
+                                            className="w-6 h-6 flex items-center justify-center bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
+                                            <Plus size={11} />
+                                        </button>
+                                    </div>
+                                </div>
+                                <input type="range" min={1} max={files.length || 20} value={shortlist}
+                                    onChange={e => setShortlist(+e.target.value)}
+                                    className="w-full accent-emerald-600 cursor-pointer" />
+                            </div>
+
+                            {/* Keywords */}
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Required Keywords (Gate)</label>
+                                <div className="flex gap-2">
+                                    <input value={kwInput} onChange={e => setKwInput(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addKw(); } }}
+                                        placeholder="Type key skill & Enter"
+                                        className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/10 font-semibold placeholder:text-slate-300 transition-all" />
+                                    <button onClick={addKw}
+                                        className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-sm">
+                                        Add
+                                    </button>
+                                </div>
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                    {PRESETS.map(s => {
+                                        const active = keywords.includes(s.toLowerCase());
+                                        return (
+                                            <button key={s} onClick={() => togglePreset(s)}
+                                                className={`text-[9px] px-2 py-0.5 rounded-full font-bold border transition-all ${active ? 'bg-emerald-600 text-white border-transparent shadow-sm' : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-500/20'}`}>
+                                                {s}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {keywords.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-2 pt-2 border-t border-slate-100">
+                                        {keywords.map(k => (
+                                            <span key={k} className="inline-flex items-center gap-1.5 text-[9px] px-2.5 py-0.5 bg-green-50 text-emerald-700 border border-green-150 rounded-md font-bold uppercase shadow-sm">
+                                                {k}
+                                                <button onClick={() => removeKw(k)} className="hover:text-rose-500"><X size={10} /></button>
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Step 4: Resume Source */}
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden transition-all duration-300 hover:border-slate-300">
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center shadow-inner">
+                                    <Upload size={14} />
+                                </div>
+                                <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">4 · Resume Sources</span>
+                            </div>
+                            <div className="relative">
+                                <button onClick={() => setShowFolderMenu(v => !v)}
+                                    className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-250/20 px-2.5 py-1.5 rounded-lg hover:bg-emerald-100/50 transition-all shadow-sm">
+                                    <FolderOpen size={11} /> Load Folder <ChevronDown size={9} />
+                                </button>
+                                {showFolderMenu && (
+                                    <>
+                                        <div className="fixed inset-0 z-40" onClick={() => setShowFolderMenu(false)} />
+                                        <div className="absolute right-0 top-full mt-1.5 w-40 bg-white rounded-xl shadow-xl border border-slate-200 z-50 overflow-hidden">
+                                            <button onClick={() => { setShowFolderMenu(false); setShowLocalModal(true); }}
+                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 border-b border-slate-100">
+                                                <HardDrive size={13} className="text-emerald-600" /> Local Directory
+                                            </button>
+                                            <button onClick={handleOneDriveClick}
+                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50">
+                                                <Cloud size={13} className="text-blue-400" />
+                                                {oneDriveConnected ? 'OneDrive' : 'OneDrive (connect)'}
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            {/* Selected OneDrive folder badge */}
+                            {selectedOneDriveFolder ? (
+                                <div className="flex items-center gap-2 px-3 py-2.5 bg-blue-50 border border-blue-200 rounded-xl text-xs">
+                                    <Cloud size={13} className="text-blue-500 shrink-0" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-bold text-blue-700 truncate">{selectedOneDriveFolder.name}</p>
+                                        <p className="text-blue-400 text-[10px]">
+                                            {oneDriveFiles.length > 0 ? `${oneDriveFiles.length} file(s) will be screened` : 'All PDFs/DOCX in this folder will be screened'}
+                                        </p>
+                                    </div>
+                                    <button onClick={() => setShowOneDriveModal(true)} className="text-blue-400 hover:text-blue-600 shrink-0 text-[10px] font-bold">Change</button>
+                                    <button onClick={() => { setSelectedOneDriveFolder(null); setOneDriveFiles([]); }} className="text-blue-300 hover:text-rose-500 shrink-0"><X size={12} /></button>
+                                </div>
+                            ) : (
+                            <div {...getRootProps()}
+                                className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center text-center cursor-pointer transition-all ${isDragActive ? 'border-emerald-500 bg-green-50/20 scale-[1.01]' : 'border-slate-200 hover:border-emerald-500/30 hover:bg-slate-50/50'}`}>
+                                <input {...getInputProps()} />
+                                <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center mb-2 text-emerald-600 shadow-inner">
+                                    <Upload size={18} />
+                                </div>
+                                <p className="text-xs font-bold text-slate-700">Drop PDF / DOCX resumes</p>
+                                <p className="text-[10px] text-slate-400 mt-1">or click to browse local files</p>
+                            </div>
+                            )}
+
+                            {files.length > 0 && (
+                                <div className="space-y-2">
+                                    <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                        <span>File Queue ({files.length})</span>
+                                        <button onClick={() => setFiles([])} className="text-rose-500 hover:underline">Clear Queue</button>
+                                    </div>
+                                    <div className="max-h-36 overflow-y-auto space-y-1 pr-1 scroll-smooth">
+                                        {files.map((f, i) => (
+                                            <div key={i} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-100 text-xs">
+                                                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${i < batchCompleted ? 'bg-emerald-500' : screening ? 'bg-amber-400 animate-pulse' : 'bg-slate-300'}`} />
+                                                <span className="truncate font-semibold text-slate-600 flex-1">{f.name}</span>
+                                                {!screening && (
+                                                    <button onClick={() => setFiles(p => p.filter((_, j) => j !== i))}
+                                                        className="text-slate-300 hover:text-rose-500"><X size={11} /></button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                </div>
+
+                {/* RIGHT ACTIVE WORKSPACE & BATCH ARCHIVE PANEL */}
+                <div className="xl:col-span-8 flex flex-col gap-6 w-full">
+
+                    {/* Tab Navigation & Toolbar */}
+                    <div className="bg-white border border-slate-200 rounded-3xl shadow-sm flex items-center justify-between p-2 gap-4">
+                        <div className="flex gap-1.5">
+                            {[
+                                { id: 'workspace', label: 'Screening Leaderboard', icon: TrendingUp },
+                                { id: 'history', label: 'Run Archive', icon: Calendar },
+                            ].map(t => (
+                                <button key={t.id} onClick={() => setTab(t.id)}
+                                    className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-bold transition-all ${tab === t.id ? 'bg-emerald-50 text-emerald-600 shadow-sm' : 'text-slate-400 hover:bg-slate-50'}`}>
+                                    <t.icon size={13} className={tab === t.id ? 'text-emerald-500' : ''} /> {t.label}
+                                    {t.id === 'history' && batches.length > 0 && (
+                                        <span className="bg-slate-100 text-slate-500 rounded-full text-[9px] font-black px-1.5 py-0.5 ml-1">{batches.length}</span>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                        {tab === 'workspace' && (
+                            <div className="flex items-center gap-3">
+                                {/* Search box */}
+                                {results.length > 0 && (
+                                    <div className="relative hidden md:block">
+                                        <input type="text" placeholder="Filter candidates…" value={candidateSearch}
+                                            onChange={e => setCandidateSearch(e.target.value)}
+                                            className="px-3.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/10 font-semibold" />
+                                    </div>
+                                )}
+                                {/* View Mode Toggle */}
+                                {screened.length > 0 && (
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={() => setShowExportModal(true)}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold shadow-sm transition-all">
+                                            <Download size={13} /> Export
+                                        </button>
+                                        <div className="flex border border-slate-200 rounded-xl p-0.5 bg-slate-50">
+                                            <button onClick={() => setViewMode('grid')}
+                                                className={`p-1.5 rounded-lg transition-all ${viewMode === 'grid' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>
+                                                <LayoutGrid size={14} />
+                                            </button>
+                                            <button onClick={() => setViewMode('table')}
+                                                className={`p-1.5 rounded-lg transition-all ${viewMode === 'table' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>
+                                                <List size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                                {/* Start screening button */}
+                                <button onClick={startScreening} disabled={!isValid || screening}
+                                    className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-black transition-all shadow-md ${!isValid || screening ? 'bg-slate-100 text-slate-350 cursor-not-allowed shadow-none' : 'bg-emerald-600 text-white hover:bg-emerald-700 hover:-translate-y-0.5'}`}>
+                                    {screening
+                                        ? <><Loader2 size={13} className="animate-spin" /> Analyzing Resumes…</>
+                                        : <><Play size={11} fill="currentColor" /> Start Screening</>}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ─── Leaderboard Workspace Tab ─── */}
+                    {tab === 'workspace' && (
+                        <div className="space-y-6">
+                            {/* Progress Pipeline Dashboard */}
+                            <AnimatePresence>
+                                {screening && (
+                                    <ProcessingBanner completed={batchCompleted} total={batchTotal} results={results} />
+                                )}
+                            </AnimatePresence>
+
+                            {/* Summary KPI Panel (only when results exist) */}
+                            {results.length > 0 && (
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    {[
+                                        { label: 'Total Uploaded', value: results.filter(r => !r.isPending).length, color: 'text-slate-800', bg: 'bg-white', border: 'border-slate-200' },
+                                        { label: 'Passed Screening', value: screened.length, color: 'text-emerald-700', bg: 'bg-emerald-50/50', border: 'border-emerald-100' },
+                                        { label: 'Top AI Fit Score', value: `${topScore}%`, color: 'text-emerald-600', bg: 'bg-green-50/20', border: 'border-green-100' },
+                                        { label: 'Average Match Fit', value: `${avgScore}%`, color: 'text-amber-700', bg: 'bg-amber-50/30', border: 'border-amber-100' },
+                                    ].map(s => (
+                                        <div key={s.label} className={`${s.bg} border ${s.border} rounded-3xl p-5 flex flex-col shadow-sm`}>
+                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">{s.label}</span>
+                                            <span className={`text-2xl font-black leading-none ${s.color}`}>{s.value}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Empty state instructions */}
+                            {results.length === 0 && !screening && (
+                                <div className="bg-white border border-slate-200 rounded-3xl p-16 flex flex-col items-center text-center shadow-sm">
+                                    <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center mb-4 border border-slate-100 shadow-inner text-slate-300">
+                                        <Brain size={30} />
+                                    </div>
+                                    <h3 className="text-base font-black text-slate-700">Ready to Screen Applicants</h3>
+                                    <p className="text-xs text-slate-400 max-w-sm mt-2 leading-relaxed font-semibold">
+                                        Configure job requirements, optional parameters, custom prompts, and drag applicant resumes on the left.
+                                    </p>
+                                    <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-lg">
+                                        {[
+                                            { label: 'Job Description', done: jd.trim().length > 0 },
+                                            { label: 'Keywords Gate', done: keywords.length > 0 },
+                                            { label: 'Custom Guidelines', done: customPrompt.trim().length > 0 },
+                                            { label: 'Resumes Loaded', done: files.length > 0 },
+                                        ].map((s, i) => (
+                                            <div key={i} className={`flex flex-col items-center gap-2 p-3 rounded-2xl border transition-all shadow-sm ${s.done ? 'bg-green-50/40 border-green-150' : 'bg-slate-50/30 border-slate-100'}`}>
+                                                <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-black ${s.done ? 'bg-green-100 text-emerald-600 shadow-inner' : 'bg-slate-150 text-slate-400'}`}>
+                                                    {s.done ? '✓' : i + 1}
+                                                </div>
+                                                <span className="text-[10px] font-extrabold text-slate-500 text-center leading-tight uppercase">{s.label}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* GRID VIEW RESULTS */}
+                            {screened.length > 0 && viewMode === 'grid' && (
+                                <div className="space-y-4">
+                                    <div className="flex justify-between items-center">
+                                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                            <Star size={12} className="text-amber-400 fill-amber-400 animate-spin-slow" /> Ranked Candidates List ({filteredScreened.length})
+                                        </h3>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-5">
+                                        <AnimatePresence>
+                                            {filteredScreened.map((c, i) => (
+                                                <CandidateCard key={c.id} candidate={c} rank={i + 1}
+                                                    onClick={() => { setDrawerCandidate(c); setDrawerOpen(true); }}
+                                                    onChat={() => deepLinkChat(c)} />
+                                            ))}
+                                        </AnimatePresence>
+                                    </div>
+                                    {filteredScreened.length === 0 && (
+                                        <p className="text-xs font-semibold text-slate-400 text-center py-6">No matching candidates found.</p>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* TABLE VIEW RESULTS */}
+                            {screened.length > 0 && viewMode === 'table' && (
+                                <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-xs">
+                                            <thead>
+                                                <tr className="bg-slate-50/80 border-b border-slate-200">
+                                                    <th className="px-5 py-4 text-left font-bold text-slate-400 uppercase tracking-wider w-16">Rank</th>
+                                                    <th className="px-5 py-4 text-left font-bold text-slate-400 uppercase tracking-wider">Candidate Details</th>
+                                                    <th className="px-5 py-4 text-left font-bold text-slate-400 uppercase tracking-wider">Experience</th>
+                                                    <th className="px-5 py-4 text-left font-bold text-slate-400 uppercase tracking-wider w-24">Match Score</th>
+                                                    <th className="px-5 py-4 text-left font-bold text-slate-400 tracking-wider uppercase">Matches / Custom Badges</th>
+                                                    <th className="px-5 py-4 text-center font-bold text-slate-400 uppercase tracking-wider w-36">Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {filteredScreened.map((c, i) => {
+                                                    const score = c.score || 0;
+                                                    const scoreBg = score >= 75 ? 'bg-emerald-50 text-emerald-700 border-emerald-150' : score >= 50 ? 'bg-amber-50 text-amber-700 border-amber-150' : 'bg-rose-50 text-rose-700 border-rose-150';
+                                                    const gems = c.analysis?.custom_prompt_matches || [];
+                                                    return (
+                                                        <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
+                                                            <td className="px-5 py-4">
+                                                                <span className="inline-flex items-center justify-center w-7 h-7 rounded-xl bg-slate-100 text-slate-700 font-black">
+                                                                    #{i + 1}
+                                                                </span>
+                                                            </td>
+                                                            <td className="px-5 py-4">
+                                                                <span className="font-extrabold text-slate-800 block text-sm">{c.name}</span>
+                                                                <span className="text-slate-400 font-semibold">{(c.candidate?.email && !c.candidate.email.startsWith('no-email-')) ? c.candidate.email : '—'}</span>
+                                                            </td>
+                                                            <td className="px-5 py-4 text-slate-600 font-bold uppercase">
+                                                                {c.analysis?.experience || 'None'}
+                                                            </td>
+                                                            <td className="px-5 py-4">
+                                                                <span className={`inline-flex px-2.5 py-1 rounded-lg text-xs font-black border ${scoreBg}`}>
+                                                                    {Math.round(score)}%
+                                                                </span>
+                                                            </td>
+                                                            <td className="px-5 py-4">
+                                                                <div className="flex flex-wrap gap-1">
+                                                                    {gems.map((g, idx) => (
+                                                                        <GemBadge key={idx} label={g} />
+                                                                    ))}
+                                                                    {gems.length === 0 && <span className="text-slate-300 italic">No matches</span>}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-5 py-4">
+                                                                <div className="flex items-center justify-center gap-2">
+                                                                    <button onClick={() => { setDrawerCandidate(c); setDrawerOpen(true); }}
+                                                                        className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-600 font-bold flex items-center gap-1 shadow-sm">
+                                                                        <Eye size={11} /> Dossier
+                                                                    </button>
+                                                                    <button onClick={() => deepLinkChat(c)}
+                                                                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100/60 border border-emerald-250/20 text-emerald-700 rounded-lg font-bold flex items-center gap-1 shadow-sm">
+                                                                        <MessageSquare size={11} /> Ask
+                                                                    </button>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Pending Spinner queue */}
+                            {pending.length > 0 && !screening && (
+                                <div className="space-y-2">
+                                    <h3 className="text-xs font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                                        <Loader2 size={12} className="animate-spin" /> Scanning Queue ({pending.length} files)
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        {pending.map(r => (
+                                            <div key={r.id} className="bg-amber-50/20 border border-amber-100 rounded-2xl p-4 flex items-center gap-3 animate-pulse">
+                                                <Loader2 size={14} className="animate-spin text-amber-500 shrink-0" />
+                                                <span className="text-xs font-bold text-slate-600 truncate">{r.name}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Failed resumes panel */}
+                            {failed.length > 0 && (
+                                <div className="bg-rose-50 border border-rose-100 rounded-3xl p-5 space-y-3 shadow-sm">
+                                    <h4 className="text-xs font-black text-rose-700 flex items-center gap-2 uppercase tracking-wider">
+                                        <AlertCircle size={14} /> Failed / Unprocessable Resumes ({failed.length})
+                                    </h4>
+                                    <div className="space-y-2">
+                                        {failed.map(f => (
+                                            <div key={f.id} className="bg-white border border-rose-100 rounded-2xl p-4 flex items-start justify-between gap-4 shadow-sm">
+                                                <span className="text-xs font-bold text-slate-700 truncate">{f.name}</span>
+                                                <span className="text-[10px] font-semibold text-rose-600 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100 leading-tight">{f.reasoning || 'Deduction rules or parse error'}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                        </div>
+                    )}
+
+                    {/* ─── Archive Tab ─── */}
+                    {tab === 'history' && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Saved Run Archive</h3>
+                                <button onClick={fetchBatches} disabled={loadingBatches}
+                                    className="text-[11px] font-black text-slate-500 hover:text-emerald-600 flex items-center gap-1 transition-colors">
+                                    <RefreshCw size={11} className={loadingBatches ? 'animate-spin' : ''} /> Refresh History
+                                </button>
+                            </div>
+
+                            {loadingBatches ? (
+                                <div className="bg-white border border-slate-200 rounded-3xl p-20 flex items-center justify-center gap-2 text-slate-400 shadow-sm">
+                                    <Loader2 className="animate-spin text-emerald-500" size={22} />
+                                </div>
+                            ) : batches.length === 0 ? (
+                                <div className="bg-white border border-slate-250 border-dashed rounded-3xl p-16 flex flex-col items-center text-center">
+                                    <Calendar size={36} className="text-slate-300 mb-3" />
+                                    <h4 className="text-sm font-black text-slate-700">No Screening History Found</h4>
+                                    <p className="text-xs text-slate-400 mt-2 font-semibold">Run your first resume screening batch to archive runs here.</p>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-5">
+                                    {batches.map(b => {
+                                        const passRate = b.total > 0 ? Math.round((b.completed / b.total) * 100) : 0;
+                                        const isActive = activeBatch === b.batch_id;
+                                        return (
+                                            <div key={b.batch_id} onClick={() => loadBatch(b.batch_id)}
+                                                className={`group bg-white border rounded-3xl p-5 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer flex flex-col gap-4 justify-between ${isActive ? 'border-emerald-500 ring-2 ring-emerald-500/10 bg-green-50/10' : 'border-slate-200 hover:border-emerald-500/30'}`}>
+                                                <div className="space-y-3">
+                                                    <div className="flex justify-between items-start">
+                                                        <div className="flex-1 pr-2">
+                                                            <h4 className="text-sm font-extrabold text-slate-800 truncate leading-snug">
+                                                                {b.batch_name || b.role || 'General Screening'}
+                                                            </h4>
+                                                            {b.batch_name && b.role && (
+                                                                <p className="text-[11px] font-semibold text-slate-400 mt-0.5 truncate">{b.role}</p>
+                                                            )}
+                                                            <div className="flex items-center gap-1.5 mt-2 text-[10px] font-bold text-slate-400">
+                                                                <Calendar size={10} />
+                                                                {new Date(b.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                                                            </div>
+                                                        </div>
+                                                        <button onClick={e => deleteBatch(b.batch_id, e)}
+                                                            className="opacity-0 group-hover:opacity-100 p-2 hover:bg-rose-50 hover:text-rose-500 text-slate-300 rounded-xl transition-all shadow-sm">
+                                                            <Trash2 size={13} />
+                                                        </button>
+                                                    </div>
+
+                                                    {b.custom_prompt && (
+                                                        <div className="flex items-center gap-1 text-[9px] font-bold text-violet-700 bg-violet-50 border border-violet-100 px-2 py-0.5 rounded-lg w-fit">
+                                                            <Gem size={8} className="text-violet-500 animate-spin-slow" /> Custom Guidelines applied
+                                                        </div>
+                                                    )}
+
+                                                    <div className="space-y-1">
+                                                        <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase">
+                                                            <span>Screen Fit Rate</span>
+                                                            <span className="text-emerald-600">{passRate}%</span>
+                                                        </div>
+                                                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${passRate}%` }} />
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex items-center justify-between pt-3 border-t border-slate-100 mt-3">
+                                                    <div className="flex gap-2.5 text-[10px] font-bold text-slate-400">
+                                                        <span className="text-emerald-600">{b.completed} OK</span>
+                                                        {b.failed > 0 && <span className="text-rose-500">{b.failed} ERR</span>}
+                                                        {(b.pending || 0) > 0 && (
+                                                            <span className="text-amber-500 flex items-center gap-0.5 animate-pulse">
+                                                                <Clock size={9} /> {b.pending}
+                                                            </span>
+                                                        )}
+                                                        <span>/ {b.total} resumes</span>
+                                                    </div>
+                                                    <span className="text-emerald-600 text-xs font-bold flex items-center gap-0.5 group-hover:translate-x-1 transition-all">
+                                                        Load Run <ArrowRight size={12} />
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                </div>
+            </div>
+
+            {/* Dossier slide-over Drawer */}
+            <DossierDrawer
+                open={drawerOpen}
+                onClose={() => { setDrawerOpen(false); setDrawerCandidate(null); setPromoted(false); }}
+                candidate={drawerCandidate}
+                rank={drawerCandidate ? screened.findIndex(r => r.id === drawerCandidate.id) + 1 : 1}
+                onChat={() => drawerCandidate && deepLinkChat(drawerCandidate)}
+                onPromote={() => drawerCandidate?.candidate?.id && promoteSingle(drawerCandidate.candidate.id)}
+                promoting={promoting}
+                promoted={promoted}
+            />
+
+            {/* Local Directory upload Modal */}
+            <AnimatePresence>
+                {showLocalModal && <LocalUploadModal isOpen onClose={() => setShowLocalModal(false)} onUpload={files => setFiles(p => [...p, ...files])} />}
+            </AnimatePresence>
+
+            {/* Premium Blocker Modal */}
+            <AnimatePresence>
+                {showPremiumModal && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4" onClick={() => setShowPremiumModal(false)}>
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            transition={{ type: "spring", duration: 0.5 }}
+                            className="relative bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 text-white rounded-3xl shadow-2xl max-w-md w-full p-8 border border-slate-800 overflow-hidden" 
+                            onClick={e => e.stopPropagation()}
+                        >
+                            {/* Decorative background blur glows */}
+                            <div className="absolute -top-24 -left-24 w-48 h-48 bg-violet-600/20 rounded-full blur-3xl" />
+                            <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-emerald-600/10 rounded-full blur-3xl" />
+                            
+                            {/* Close Button */}
+                            <button onClick={() => setShowPremiumModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white transition-colors">
+                                <X size={20} />
+                            </button>
+
+                            {/* Crown / Premium Icon */}
+                            <div className="relative w-16 h-16 bg-gradient-to-tr from-violet-600 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-amber-300 shadow-[0_0_20px_rgba(124,58,237,0.3)] mb-6">
+                                <Crown size={30} className="animate-pulse" />
+                                <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-amber-400 rounded-full flex items-center justify-center text-slate-950 border border-slate-900 shadow">
+                                    <Lock size={10} />
+                                </div>
+                            </div>
+
+                            {/* Text Content */}
+                            <div className="text-center relative z-10 space-y-3">
+                                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-violet-500/10 border border-violet-500/20 text-violet-300 text-[10px] font-black uppercase tracking-wider rounded-full">
+                                    <Zap size={10} className="fill-violet-300 animate-pulse" /> Next Stage: Aptitude Round
+                                </div>
+                                <h3 className="text-xl font-black tracking-tight text-white">Unlock Premium Access</h3>
+                                <p className="text-xs text-slate-300 leading-relaxed font-semibold">
+                                    Aptitude, Coding, and Technical Interview assessment rounds are premium features. Upgrade your plan to access automated evaluations, interactive coding sandboxes, and real-time voice interview agents.
+                                </p>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="flex flex-col gap-3 mt-8 relative z-10">
+                                <button onClick={() => window.open("https://thirdeyedata.ai/contact-us/", "_blank")}
+                                    className="w-full py-3.5 text-xs font-black text-slate-950 bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-300 hover:from-amber-300 hover:to-yellow-300 rounded-2xl transition-all shadow-[0_4px_20px_rgba(245,158,11,0.25)] flex items-center justify-center gap-2">
+                                    <Sparkles size={14} className="fill-slate-950" /> Unlock Premium Now
+                                </button>
+                                <button onClick={() => setShowPremiumModal(false)}
+                                    className="w-full py-3 text-xs font-bold text-slate-400 hover:text-white bg-slate-800/40 hover:bg-slate-800/80 rounded-2xl border border-slate-800 transition-all">
+                                    Maybe Later
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* Reset Dialogue modal */}
+            {showReset && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4" onClick={() => setShowReset(false)}>
+                    <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                        <div className="w-12 h-12 bg-rose-50 rounded-full flex items-center justify-center mx-auto text-rose-600 shadow-inner">
+                            <AlertCircle size={22} />
+                        </div>
+                        <div className="text-center">
+                            <h3 className="text-base font-black text-slate-800">Clear Active Workspace?</h3>
+                            <p className="text-xs text-slate-400 leading-relaxed font-semibold mt-1">
+                                This clears your current JD and resume queue. Historical batches in the database will remain archived.
+                            </p>
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowReset(false)}
+                                className="flex-1 py-2.5 text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all">Cancel</button>
+                            <button onClick={resetAll}
+                                className="flex-1 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-sm">Reset Workspace</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* OneDrive Modal */}
+            <AnimatePresence>
+            {showOneDriveModal && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+                    onClick={e => { if (e.target === e.currentTarget) setShowOneDriveModal(false); }}>
+                    <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+                        className="bg-white rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 overflow-hidden">
+
+                        {/* Header */}
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <Cloud size={16} className="text-blue-500" />
+                                <h3 className="text-sm font-bold text-slate-800">OneDrive</h3>
+                            </div>
+                            <button onClick={() => setShowOneDriveModal(false)} className="text-slate-300 hover:text-slate-500 p-1 rounded-lg hover:bg-slate-50"><X size={15} /></button>
+                        </div>
+
+                        {/* Status row */}
+                        <div className="px-5 pt-4 pb-2 flex items-center gap-2">
+                            <div className={`w-2 h-2 rounded-full shrink-0 ${oneDriveConnected ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                            <span className="text-xs font-semibold text-slate-600 flex-1">
+                                {oneDriveConnected ? 'Connected to OneDrive' : 'Not connected'}
+                            </span>
+                            {oneDriveConnected && (
+                                <button onClick={handleOneDriveConnect}
+                                    className="text-[10px] font-bold text-blue-500 hover:text-blue-700 hover:underline">
+                                    Reconnect
+                                </button>
+                            )}
+                        </div>
+
+                        {/* Connect button (not connected) */}
+                        {!oneDriveConnected && (
+                            <div className="px-5 pb-5 pt-2">
+                                <button onClick={handleOneDriveConnect}
+                                    className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center justify-center gap-2">
+                                    <Cloud size={13} /> Connect OneDrive Account
+                                </button>
+                                <p className="text-[10px] text-slate-400 text-center mt-2">A popup will open to sign in with Microsoft</p>
+                            </div>
+                        )}
+
+                        {/* Folder picker (connected) */}
+                        {oneDriveConnected && (
+                            <div className="px-5 pb-5 pt-1 space-y-3">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Select a Folder</p>
+                                <div className="border border-slate-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto">
+                                    {oneDriveFoldersLoading ? (
+                                        <div className="flex items-center justify-center py-8 gap-2 text-xs text-slate-400">
+                                            <Loader2 size={13} className="animate-spin" /> Loading folders…
+                                        </div>
+                                    ) : oneDriveFolders.length === 0 ? (
+                                        <p className="text-xs text-slate-400 text-center py-8">No folders found.</p>
+                                    ) : (
+                                        oneDriveFolders.map(f => (
+                                            <button key={f.id} onClick={() => handleFolderSelect(f)}
+                                                className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs text-left border-b border-slate-50 last:border-0 transition-colors hover:bg-blue-50 ${selectedOneDriveFolder?.id === f.id ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-700'}`}>
+                                                <FolderOpen size={12} className={`shrink-0 ${selectedOneDriveFolder?.id === f.id ? 'text-blue-500' : 'text-slate-400'}`} />
+                                                <span className="truncate">{f.name}</span>
+                                                {selectedOneDriveFolder?.id === f.id && <CheckCircle size={11} className="ml-auto text-blue-500 shrink-0" />}
+                                            </button>
+                                        ))
+                                    )}
+                                </div>
+
+                                {/* File preview */}
+                                {selectedOneDriveFolder && (
+                                    <div>
+                                        {oneDriveFilesLoading ? (
+                                            <div className="flex items-center gap-2 text-xs text-slate-400 py-1">
+                                                <Loader2 size={12} className="animate-spin" /> Scanning files…
+                                            </div>
+                                        ) : oneDriveFiles.length > 0 ? (
+                                            <div className="space-y-1">
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                                    {oneDriveFiles.length} resume file{oneDriveFiles.length !== 1 ? 's' : ''} found
+                                                </p>
+                                                <div className="max-h-32 overflow-y-auto space-y-1">
+                                                    {oneDriveFiles.map((f, i) => (
+                                                        <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-50 rounded-lg text-[11px] text-slate-600 border border-slate-100">
+                                                            <FileText size={11} className="text-slate-400 shrink-0" />
+                                                            <span className="truncate">{f.name}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <p className="text-[11px] text-slate-400 py-1">No PDF or DOCX files found in this folder.</p>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Footer */}
+                                <div className="flex gap-2 pt-1">
+                                    <button onClick={() => setShowOneDriveModal(false)}
+                                        className="flex-1 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors">
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={() => { setFiles([]); setShowOneDriveModal(false); }}
+                                        disabled={!selectedOneDriveFolder || oneDriveFiles.length === 0}
+                                        className="flex-1 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                                        Load {oneDriveFiles.length > 0 ? `${oneDriveFiles.length} Files` : 'Files'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </motion.div>
+                </motion.div>
+            )}
+            </AnimatePresence>
+
+            {/* Export Config Modal */}
+            <ExportConfigModal
+                isOpen={showExportModal}
+                onClose={() => setShowExportModal(false)}
+                candidates={screened}
+                onExport={(format, columns) => {
+                    setShowExportModal(false);
+                    if (format === 'pdf') exportToPDF(screened, columns);
+                    else if (format === 'excel') exportToExcel(screened, columns);
+                }}
+            />
+
         </div>
     );
 };

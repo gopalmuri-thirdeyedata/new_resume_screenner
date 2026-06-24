@@ -29,6 +29,31 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/onedrive': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/check_onedrive_authenticated': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/folders': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/onedrive-folder-files': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/save-onedrive-folder': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
 })

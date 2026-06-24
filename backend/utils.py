@@ -41,6 +41,10 @@ EMAIL_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 
 def send_email(to_email: str, subject: str, html_content: str):
+    if not to_email or to_email.startswith("no-email-") or "@" not in to_email:
+        print(f"Skipping email sending to dummy/fallback address: {to_email}")
+        return False
+
     # Fetch latest credentials from environment
     load_dotenv(override=False)
     host = os.getenv("EMAIL_HOST", "smtp.gmail.com")

@@ -91,6 +91,31 @@ async def rag_status(
         }
 
 
+@router.delete("/indexed-candidates/{candidate_id}")
+async def delete_indexed_candidate(
+    candidate_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Remove a specific candidate's vectors from the RAG index (Qdrant only).
+    The candidate record in the database is NOT deleted — only their indexed docs are removed.
+    """
+    candidate = db.query(models.Candidate).filter(
+        models.Candidate.id == candidate_id,
+        models.Candidate.created_by == current_user.id
+    ).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    from services.rag_service import RagIndexingService
+    success = RagIndexingService.delete_candidate_vectors(candidate_id, current_user.id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to remove vectors from index")
+
+    return {"message": f"Removed {candidate.name}'s documents from RAG index.", "candidate_id": candidate_id}
+
+
 @router.get("/indexed-candidates")
 async def indexed_candidates(
     db: Session = Depends(database.get_db),

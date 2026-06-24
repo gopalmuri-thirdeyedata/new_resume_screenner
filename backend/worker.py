@@ -130,8 +130,11 @@ def _do_screening(job_id: int) -> dict:
                 "extracted_role":   merged.get("extracted_role", ""),
                 "experience":       merged.get("experience", "None"),
                 "certification_match": merged.get("certification_match", []),
+                "custom_prompt_matches": merged.get("custom_prompt_matches", []),
                 "candidate_summary": merged.get("candidate_summary", ""),
-                "keyword_match_pct": keyword_match_pct
+                "keyword_match_pct": keyword_match_pct,
+                "location":          merged.get("location"),
+                "education_details": merged.get("education_details")
             }
         else:
             # 2. Keyword score check first (fast regex-based, no LLM)
@@ -189,8 +192,11 @@ def _do_screening(job_id: int) -> dict:
                 "extracted_role":   merged.get("extracted_role", ""),
                 "experience":       merged.get("experience", "None"),
                 "certification_match": merged.get("certification_match", []),
+                "custom_prompt_matches": merged.get("custom_prompt_matches", []),
                 "candidate_summary": merged.get("candidate_summary", ""),
-                "keyword_match_pct": keyword_score if has_custom_keywords else None
+                "keyword_match_pct": keyword_score if has_custom_keywords else None,
+                "location":          merged.get("location"),
+                "education_details": merged.get("education_details")
             }
 
         # Filename fallback for name
@@ -203,8 +209,19 @@ def _do_screening(job_id: int) -> dict:
                 candidate_info["name"] = clean_name
 
         email = candidate_info.get("email")
-        if not email or is_dummy_contact(email):
-            raise ScreeningValidationError(f"Could not extract a valid email from {filename} (email is required for candidate record).")
+        phone = candidate_info.get("phone")
+        email_dummy = is_dummy_contact(email)
+        phone_dummy = is_dummy_contact(phone)
+
+        if email_dummy and phone_dummy:
+            raise ScreeningValidationError(f"Could not extract contact information (neither email nor phone number found in {filename}).")
+
+        if email_dummy:
+            # Fallback placeholder email based on the extracted phone number
+            clean_phone = re.sub(r'[^a-zA-Z0-9]', '', phone)
+            email = f"no-email-{clean_phone}@hiringai.com"
+            candidate_info["email"] = email
+
         log(f"[Worker] Job {job_id} → email: {email} | LLM score: {analysis['score']}")
 
         # 4. Normalize role from first line of JD

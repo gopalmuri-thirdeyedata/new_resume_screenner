@@ -124,10 +124,25 @@ class Notification(Base):
 
     user = relationship("User")
 
+class OneDriveUser(Base):
+    __tablename__ = "onedrive_users"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    user_email = Column(String(150), unique=True, nullable=False, index=True)
+    access_token = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    token_expiry = Column(DateTime(timezone=True), nullable=True)
+    input_folder_id = Column(String(255), default="")
+    delta_link = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User")
+
 class ScreeningJob(Base):
     __tablename__ = "screening_jobs"
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(String(36), index=True, nullable=False)
+    batch_name = Column(String(200), nullable=True)  # Optional label for the batch
     filename = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)
     jd_text = Column(Text, nullable=False)

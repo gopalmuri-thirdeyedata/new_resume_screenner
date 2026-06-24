@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
     Send, Bot, User, Loader2, Sparkles, AlertCircle,
     RotateCcw, Search, ChevronRight, FileText, Star,
-    MessageSquare, Zap, X,
+    MessageSquare, Zap, X, Trash2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import API_URL from '../apiConfig';
@@ -222,34 +223,75 @@ const ChatMessage = ({ message }) => {
 };
 
 // ─── Candidate Sidebar Item ────────────────────────────────────────────────────
-const CandidateItem = ({ candidate, onQuery, isActive }) => (
-    <button
-        onClick={() => onQuery(`Tell me about ${candidate.name}`)}
-        className={`w-full text-left px-3 py-2.5 rounded-xl transition-all group ${
-            isActive
-                ? 'bg-[#5d8c2c]/10 border border-[#5d8c2c]/20'
-                : 'hover:bg-gray-50 border border-transparent'
-        }`}
-    >
-        <div className="flex items-center gap-2 mb-0.5">
-            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#5d8c2c]/20 to-[#5d8c2c]/10 flex items-center justify-center flex-shrink-0">
-                <User size={11} className="text-[#5d8c2c]" />
-            </div>
-            <span className="text-xs font-semibold text-gray-800 truncate group-hover:text-[#5d8c2c] transition-colors flex-1">
-                {candidate.name}
-            </span>
-            {candidate.score !== undefined && candidate.score !== null && (
-                <ScoreBadge score={candidate.score} />
-            )}
+const CandidateItem = ({ candidate, onQuery, isActive, onDeleteClick, isDeleting, isConfirming, onConfirmDelete, onCancelDelete }) => (
+    <div className={`rounded-xl transition-all border ${
+        isActive ? 'bg-[#5d8c2c]/10 border-[#5d8c2c]/20' : 'border-transparent hover:bg-gray-50'
+    }`}>
+        {/* Main row */}
+        <div className="flex items-center gap-1 px-2 py-2 group">
+            <button
+                onClick={() => onQuery(`Tell me about ${candidate.name}`)}
+                className="flex-1 text-left flex items-center gap-2 min-w-0"
+            >
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#5d8c2c]/20 to-[#5d8c2c]/10 flex items-center justify-center flex-shrink-0">
+                    <User size={11} className="text-[#5d8c2c]" />
+                </div>
+                <div className="min-w-0 flex-1">
+                    <span className="text-xs font-semibold text-gray-800 truncate block group-hover:text-[#5d8c2c] transition-colors">
+                        {candidate.name}
+                    </span>
+                    {candidate.job_role && (
+                        <p className="text-[10px] text-gray-400 truncate">{candidate.job_role}</p>
+                    )}
+                </div>
+                {candidate.score !== undefined && candidate.score !== null && (
+                    <ScoreBadge score={candidate.score} />
+                )}
+            </button>
+
+            {/* Delete icon — shown on hover */}
+            <button
+                onClick={() => onDeleteClick(candidate.id)}
+                disabled={isDeleting}
+                title="Remove from RAG index"
+                className="flex-shrink-0 p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+            >
+                {isDeleting
+                    ? <Loader2 size={12} className="animate-spin text-red-400" />
+                    : <Trash2 size={12} />
+                }
+            </button>
         </div>
-        {candidate.job_role && (
-            <p className="text-[10px] text-gray-400 ml-8 truncate">{candidate.job_role}</p>
+
+        {/* Inline confirm */}
+        {isConfirming && (
+            <div className="mx-2 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-[10px] font-semibold text-red-700 mb-1.5">Remove from RAG index?</p>
+                <div className="flex gap-1.5">
+                    <button
+                        onClick={onConfirmDelete}
+                        disabled={isDeleting}
+                        className="flex-1 py-1 text-[10px] font-bold text-white bg-red-500 hover:bg-red-600 rounded-md transition-colors disabled:opacity-50"
+                    >
+                        {isDeleting ? 'Removing…' : 'Remove'}
+                    </button>
+                    <button
+                        onClick={onCancelDelete}
+                        className="flex-1 py-1 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 rounded-md transition-colors"
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </div>
         )}
-    </button>
+    </div>
 );
 
 // ─── Main Component ────────────────────────────────────────────────────────────
 export default function ResumeChat() {
+    const location = useLocation();
+    const querySentRef = useRef(false);
+
     const [messages, setMessages] = useState(() => loadMessages() || [WELCOME]);
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -258,6 +300,9 @@ export default function ResumeChat() {
     const [candidatesLoading, setCandidatesLoading] = useState(true);
     const [sidebarSearch, setSidebarSearch] = useState('');
     const [activeCandidate, setActiveCandidate] = useState(null);
+    const [pendingCandidateName, setPendingCandidateName] = useState(null);
+    const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+    const [deletingId, setDeletingId] = useState(null);
 
     const bottomRef = useRef(null);
     const inputRef = useRef(null);
@@ -349,6 +394,47 @@ export default function ResumeChat() {
         }
     }, [input, isTyping, messages, token]);
 
+    // Handle deep-link queries on mount
+    useEffect(() => {
+        let targetQuery = location.state?.query;
+        let targetCandidateName = location.state?.candidateName;
+
+        if (!targetQuery) {
+            try {
+                const stored = sessionStorage.getItem('chat_deep_link');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    targetQuery = parsed.query;
+                    targetCandidateName = parsed.candidateName;
+                    sessionStorage.removeItem('chat_deep_link');
+                }
+            } catch (e) {
+                console.error("Error reading chat_deep_link:", e);
+            }
+        }
+
+        if (targetQuery && !querySentRef.current) {
+            querySentRef.current = true;
+            if (targetCandidateName) {
+                setPendingCandidateName(targetCandidateName);
+            }
+            sendMessage(targetQuery);
+        }
+    }, [location.state, sendMessage]);
+
+    // Match candidate name once indexedCandidates loads
+    useEffect(() => {
+        if (pendingCandidateName && indexedCandidates.length > 0) {
+            const found = indexedCandidates.find(
+                c => c.name.toLowerCase() === pendingCandidateName.toLowerCase()
+            );
+            if (found) {
+                setActiveCandidate(found.id);
+                setPendingCandidateName(null);
+            }
+        }
+    }, [pendingCandidateName, indexedCandidates]);
+
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -362,9 +448,25 @@ export default function ResumeChat() {
         inputRef.current?.focus();
     };
 
-    const handleCandidateClick = (candidate) => {
-        setActiveCandidate(candidate.id);
-        sendMessage(`Tell me about ${candidate.name} — their skills, experience, and score`);
+    const handleDeleteVectors = async (candidateId) => {
+        setDeletingId(candidateId);
+        try {
+            const res = await fetch(`${API_URL}/api/rag/indexed-candidates/${candidateId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Delete failed');
+            }
+            setIndexedCandidates(prev => prev.filter(c => c.id !== candidateId));
+            if (activeCandidate === candidateId) setActiveCandidate(null);
+        } catch (err) {
+            console.error('RAG delete failed:', err);
+        } finally {
+            setDeletingId(null);
+            setConfirmDeleteId(null);
+        }
     };
 
     const filteredCandidates = indexedCandidates.filter(c =>
@@ -435,6 +537,11 @@ export default function ResumeChat() {
                                 candidate={c}
                                 onQuery={text => { setActiveCandidate(c.id); sendMessage(text); }}
                                 isActive={activeCandidate === c.id}
+                                onDeleteClick={id => setConfirmDeleteId(id)}
+                                isDeleting={deletingId === c.id}
+                                isConfirming={confirmDeleteId === c.id}
+                                onConfirmDelete={() => handleDeleteVectors(c.id)}
+                                onCancelDelete={() => setConfirmDeleteId(null)}
                             />
                         ))
                     )}

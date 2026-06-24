@@ -201,13 +201,6 @@ HiringAI/
 
 ---
 
-## 👨‍💻 Developed By
-
-**Gopal Muri**  
-*Junior AI Intern @ Third Eye Data*
-
----
-
 ## 📝 License
 
 

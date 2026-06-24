@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import models, database
-from routers import auth, assessments, resume, dashboard, settings, interview, proctor, rag
+from routers import auth, assessments, resume, dashboard, settings, interview, proctor, rag, onedrive
 
 app = FastAPI(title="HiringAI Enterprise API")
 
@@ -61,6 +61,7 @@ app.include_router(settings.router)
 app.include_router(interview.router)
 app.include_router(proctor.router)
 app.include_router(rag.router)
+app.include_router(onedrive.router)
 
 @app.get("/")
 def read_root():
